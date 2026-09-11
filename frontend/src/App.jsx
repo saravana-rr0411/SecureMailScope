@@ -7,7 +7,7 @@ import ForensicsScreen from './components/ForensicsScreen';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from './reportGenerator';
 import { deriveSecurityStats } from './utils/securityStats';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+const API_BASE = "https://securemailscope-130k.onrender.com";
 const STORAGE_VERSION = "v4.0_canonical_sync";
 
 // Safely initialize / migrate localStorage
@@ -207,9 +207,9 @@ export default function App() {
           body: formData
         });
       } catch (primaryErr) {
-        // If relative URL via Vite proxy was unreachable and API_BASE was empty, fallback to direct port 8000
+        // If primary URL was unreachable and API_BASE was empty, fallback to direct Render backend URL
         if (!API_BASE) {
-          res = await fetch("http://127.0.0.1:8000/api/pcap/analyze", {
+          res = await fetch("https://securemailscope-130k.onrender.com/api/pcap/analyze", {
             method: 'POST',
             body: formData
           });
@@ -266,7 +266,7 @@ export default function App() {
         msg.toLowerCase().includes('failed to fetch') ||
         msg.toLowerCase().includes('networkerror')
       ) {
-        setError("Failed to connect to SecureMailScope backend at http://127.0.0.1:8000. Please verify that the backend server is running.");
+        setError("Failed to connect to SecureMailScope backend at https://securemailscope-130k.onrender.com. Please verify that the backend server is running.");
       } else {
         setError(msg || "Failed to analyze PCAP capture. Is the backend server running?");
       }
