@@ -4,9 +4,20 @@ from typing import List, Dict, Any, Optional
 import os
 import shutil
 import tempfile
+import datetime
+import logging
 from app.capture.pcap_reader import analyze_pcap
 from app.ml.anomaly_detector import detector_instance, create_synthetic_development_baseline
 from app.ml.crypto_risk_scorer import crypto_risk_scorer_instance
+from app.storage.supabase_client import is_supabase_configured
+from app.storage.repository import (
+    save_analysis_result,
+    get_analysis_results,
+    get_analysis_result,
+    delete_analysis_result,
+)
+
+logger = logging.getLogger("securemailscope")
 
 app = FastAPI(title="SecureMailScope MVP")
 
@@ -65,9 +76,21 @@ async def analyze_pcap_endpoint(file: UploadFile = File(...)):
         # Process the PCAP file
         result = analyze_pcap(tmp_path)
         
-        # We replace the tmp filename with the original filename for the output
+        # Canonical metadata
         result["filename"] = file.filename
-        
+        result["capture_id"] = f"pcap_{file.filename}"
+        result["analyzed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # Persist into Supabase persistent storage
+        if is_supabase_configured():
+            try:
+                saved = save_analysis_result(result)
+                logger.info(f"Analysis successfully persisted to Supabase for capture_id: {saved.get('capture_id')}")
+            except Exception as storage_err:
+                logger.warning(f"Supabase storage error during PCAP analysis: {storage_err}")
+        else:
+            logger.info("Supabase storage skipped: SUPABASE_URL or SUPABASE_KEY not configured in environment.")
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -103,11 +126,75 @@ def analyze_demo_pcap_endpoint(demo_name: str):
     try:
         result = analyze_pcap(file_path)
         result["filename"] = filename
+        result["capture_id"] = f"pcap_{filename}"
+        result["analyzed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # Persist into Supabase persistent storage
+        if is_supabase_configured():
+            try:
+                save_analysis_result(result)
+            except Exception as storage_err:
+                logger.warning(f"Supabase storage error during demo analysis: {storage_err}")
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during demo analysis: {str(e)}")
+
+
+@app.get("/api/captures")
+def get_captures_endpoint():
+    """
+    Retrieves stored analysis history from Supabase table 'analysis_results'.
+    Returns stored analysis results in format compatible with frontend state.
+    """
+    if not is_supabase_configured():
+        logger.info("GET /api/captures: Supabase storage is not configured; returning empty list.")
+        return []
+    try:
+        return get_analysis_results()
+    except Exception as e:
+        logger.error(f"Failed to fetch captures from Supabase: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve captures: {str(e)}")
+
+
+@app.get("/api/captures/{capture_id}")
+def get_capture_endpoint(capture_id: str):
+    """
+    Retrieves a single stored analysis result by capture_id from Supabase.
+    """
+    if not is_supabase_configured():
+        raise HTTPException(status_code=503, detail="Supabase storage is not configured.")
+    try:
+        capture = get_analysis_result(capture_id)
+        if not capture:
+            raise HTTPException(status_code=404, detail=f"Capture '{capture_id}' not found.")
+        return capture
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch capture '{capture_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve capture: {str(e)}")
+
+
+@app.delete("/api/captures/{capture_id}")
+def delete_capture_endpoint(capture_id: str):
+    """
+    Deletes a stored analysis result by capture_id from Supabase.
+    """
+    if not is_supabase_configured():
+        raise HTTPException(status_code=503, detail="Supabase storage is not configured.")
+    try:
+        deleted = delete_analysis_result(capture_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Capture '{capture_id}' not found or already deleted.")
+        return {"status": "deleted", "capture_id": capture_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete capture '{capture_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete capture: {str(e)}")
 
 
 @app.post("/api/ml/baseline/train")

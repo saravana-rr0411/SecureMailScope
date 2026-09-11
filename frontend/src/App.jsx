@@ -7,7 +7,7 @@ import ForensicsScreen from './components/ForensicsScreen';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from './reportGenerator';
 import { deriveSecurityStats } from './utils/securityStats';
 
-const API_BASE = "https://securemailscope-130k.onrender.com";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 const STORAGE_VERSION = "v4.0_canonical_sync";
 
 // Safely initialize / migrate localStorage
@@ -108,6 +108,39 @@ export default function App() {
   // DERIVED STATE: Shared single-source security statistics
   const securityStats = useMemo(() => deriveSecurityStats(analyzedPcaps), [analyzedPcaps]);
 
+  // Authoritative Backend Synchronization: Load stored analysis history from Supabase
+  useEffect(() => {
+    let isMounted = true;
+    async function syncCapturesFromBackend() {
+      try {
+        const res = await fetch(`${API_BASE}/api/captures`);
+        if (res.ok) {
+          const backendCaptures = await res.json();
+          if (isMounted && Array.isArray(backendCaptures) && backendCaptures.length > 0) {
+            setAnalyzedPcaps(backendCaptures);
+            setCurrentCaptureId((prevId) => {
+              // Preserve current selection if it exists in backend results, otherwise default to first
+              if (prevId && backendCaptures.some((c) => (c.capture_id || c.id || c.filename) === prevId)) {
+                return prevId;
+              }
+              return backendCaptures[0].capture_id || backendCaptures[0].id || backendCaptures[0].filename || null;
+            });
+            // Update local cache without treating it as authoritative
+            try {
+              localStorage.setItem('sms_analyzed_pcaps', JSON.stringify(backendCaptures));
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.warn("Backend captures synchronization skipped:", err);
+      }
+    }
+    syncCapturesFromBackend();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Dark mode theme state with localStorage persistence & system preference fallback
   const [theme, setTheme] = useState(() => {
     try {
@@ -207,9 +240,8 @@ export default function App() {
           body: formData
         });
       } catch (primaryErr) {
-        // If primary URL was unreachable and API_BASE was empty, fallback to direct Render backend URL
-        if (!API_BASE) {
-          res = await fetch("https://securemailscope-130k.onrender.com/api/pcap/analyze", {
+        if (API_BASE) {
+          res = await fetch("/api/pcap/analyze", {
             method: 'POST',
             body: formData
           });
@@ -266,7 +298,7 @@ export default function App() {
         msg.toLowerCase().includes('failed to fetch') ||
         msg.toLowerCase().includes('networkerror')
       ) {
-        setError("Failed to connect to SecureMailScope backend at https://securemailscope-130k.onrender.com. Please verify that the backend server is running.");
+        setError("Failed to connect to SecureMailScope backend. Please verify that the backend server is running.");
       } else {
         setError(msg || "Failed to analyze PCAP capture. Is the backend server running?");
       }
