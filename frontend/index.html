@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SecureMailScope - SOC Cryptographic Forensics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "on-tertiary-fixed-variant": "#2f2ebe",
+              "tertiary": "#000000",
+              "surface-dim": "#cbdbf5",
+              "inverse-surface": "#213145",
+              "surface-container-highest": "#d3e4fe",
+              "on-secondary-fixed": "#001e2f",
+              "surface-tint": "#565e74",
+              "outline": "#76777d",
+              "on-background": "#0b1c30",
+              "on-tertiary-container": "#7073ff",
+              "surface-container-high": "#dce9ff",
+              "surface-variant": "#d3e4fe",
+              "surface-bright": "#f8f9ff",
+              "on-tertiary-fixed": "#07006c",
+              "surface-container-lowest": "#ffffff",
+              "primary-fixed": "#dae2fd",
+              "primary-container": "#131b2e",
+              "primary-fixed-dim": "#bec6e0",
+              "surface": "#f8f9ff",
+              "secondary-fixed": "#c9e6ff",
+              "error-container": "#ffdad6",
+              "on-tertiary": "#ffffff",
+              "on-error": "#ffffff",
+              "secondary-fixed-dim": "#89ceff",
+              "primary": "#000000",
+              "tertiary-container": "#07006c",
+              "on-secondary": "#ffffff",
+              "outline-variant": "#c6c6cd",
+              "on-surface": "#0b1c30",
+              "surface-container": "#e5eeff",
+              "tertiary-fixed-dim": "#c0c1ff",
+              "on-secondary-fixed-variant": "#004c6e",
+              "on-primary-container": "#7c839b",
+              "on-primary-fixed-variant": "#3f465c",
+              "inverse-on-surface": "#eaf1ff",
+              "error": "#ba1a1a",
+              "on-surface-variant": "#45464d",
+              "on-error-container": "#93000a",
+              "tertiary-fixed": "#e1e0ff",
+              "on-primary": "#ffffff",
+              "on-secondary-container": "#004666",
+              "secondary-container": "#39b8fd",
+              "surface-container-low": "#F8FAFC",
+              "background": "#F4F7FB",
+              "secondary": "#006591",
+              "on-primary-fixed": "#131b2e",
+              "inverse-primary": "#bec6e0",
+              brand: {
+                dark: '#0F172A',
+                muted: '#64748B',
+                border: '#E2E8F0',
+                surface: '#F8FAFC',
+                accent: '#2563EB',
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+              mono: ['JetBrains Mono', 'Fira Code', 'Courier New', 'monospace'],
+            }
+          }
+        }
+      };
+    </script>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('sms_theme');
+        if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body class="bg-[#F4F7FB] dark:bg-[#0b1320] text-[#0b1c30] dark:text-slate-100 font-sans antialiased min-h-screen transition-colors duration-150">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

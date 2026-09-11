@@ -1,0 +1,674 @@
+import React, { useState } from 'react';
+import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
+
+export default function OverviewScreen({
+  capture,
+  analyzedPcaps = [],
+  stats,
+  onSelectCapture,
+  onNavigate,
+  onTriggerUpload,
+  theme = 'light'
+}) {
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+
+  // SINGLE SOURCE OF TRUTH: All metrics derive directly from analyzedPcaps[]
+  const pcapList = Array.isArray(analyzedPcaps) && analyzedPcaps.length > 0
+    ? analyzedPcaps
+    : (capture ? [capture] : []);
+  const securityStats = stats || deriveSecurityStats(pcapList);
+
+  const totalReports = securityStats.total;
+  const secureReports = securityStats.secure;
+  const insecureReports = securityStats.insecure;
+  const securePct = securityStats.securePct;
+  const insecurePct = securityStats.insecurePct;
+  const fleetAvgRisk = securityStats.fleetAvgRisk;
+
+  // Authoritative Selected Capture: explicitly passed `capture` or the first from pcapList
+  const activeCapture = capture || (pcapList.length > 0 ? pcapList[0] : null);
+  const activeSession = activeCapture?.sessions?.[0] || null;
+
+  // Selected Capture AI Risk Score & Classification (Centralized Thresholds)
+  const currentScoreVal = activeCapture?.ai_risk?.score != null
+    ? Number(activeCapture.ai_risk.score)
+    : (activeSession?.ai_risk?.score != null
+      ? Number(activeSession.ai_risk.score)
+      : null);
+  const currentScore = currentScoreVal != null ? currentScoreVal.toFixed(1) : "—";
+  const currentScoreNum = currentScoreVal != null ? currentScoreVal : 0;
+
+  const currentLabel = activeCapture?.ai_risk
+    ? getAiRiskTier(activeCapture.ai_risk)
+    : (activeSession?.ai_risk
+      ? getAiRiskTier(activeSession.ai_risk)
+      : (currentScoreVal != null ? scoreToRiskTier(currentScoreNum) : "NONE"));
+
+  // Selected Capture Security Posture & Status
+  const pcapPosture = activeCapture ? getPcapSecurityPosture(activeCapture) : null;
+  const isSecureCapture = pcapPosture === 'SECURE';
+  const isIncompleteCapture = pcapPosture === 'INCOMPLETE';
+  const postureScore = activeCapture?.posture?.score
+    ?? activeSession?.posture?.score
+    ?? (activeCapture ? (isSecureCapture ? 100 : (isIncompleteCapture ? 100 : (currentScoreNum > 50 ? 25 : 75))) : null);
+  const statusText = isSecureCapture ? 'SECURE' : (isIncompleteCapture ? 'INCOMPLETE' : (pcapPosture ? 'INSECURE' : '—'));
+
+  let riskBadgeColor = "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800";
+  let riskDotColor = "bg-emerald-500";
+  let riskGaugeColor = "#059669";
+  let postureLabel = "MINIMAL RISK DETECTED";
+
+  if (!activeCapture || currentScoreVal == null) {
+    riskBadgeColor = "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700";
+    riskDotColor = "bg-slate-400";
+    riskGaugeColor = theme === 'dark' ? '#334155' : '#cbd5e1';
+    postureLabel = "NO CAPTURE SELECTED";
+  } else if (currentLabel === "CRITICAL") {
+    riskBadgeColor = "bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800";
+    riskDotColor = "bg-rose-700";
+    riskGaugeColor = "#991b1b";
+    postureLabel = "CRITICAL RISK DETECTED";
+  } else if (currentLabel === "HIGH") {
+    riskBadgeColor = "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800";
+    riskDotColor = "bg-rose-600";
+    riskGaugeColor = "#dc2626";
+    postureLabel = "HIGH RISK DETECTED";
+  } else if (currentLabel === "MODERATE") {
+    riskBadgeColor = "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800";
+    riskDotColor = "bg-amber-500";
+    riskGaugeColor = "#d97706";
+    postureLabel = "MODERATE RISK DETECTED";
+  }
+
+  // Circular gauge for Current Capture AI Risk: r=66, circumference = 2 * PI * 66 ≈ 414.69
+  const circumference = 414.69;
+  const clampedScore = activeCapture && currentScoreVal != null ? Math.max(0, Math.min(100, currentScoreNum)) : 0;
+  const dashOffset = Number((circumference - (circumference * clampedScore) / 100).toFixed(2));
+
+  // Build Chronological Trend Data (oldest to newest capture)
+  const trendData = [...pcapList].reverse().map((p, idx) => {
+    const pSessions = p.sessions || [];
+    const pScoreVal = p.ai_risk?.score != null
+      ? Number(p.ai_risk.score)
+      : (pSessions[0]?.ai_risk?.score != null
+        ? Number(pSessions[0].ai_risk.score)
+        : (pSessions.length > 0
+          ? Number((pSessions.reduce((acc, s) => acc + (s.ai_risk?.score ?? 0), 0) / pSessions.length).toFixed(1))
+          : 0));
+    const pScore = pScoreVal != null ? Number(pScoreVal).toFixed(1) : "0.0";
+    const pNum = Number(pScore) || 0;
+    const pLabel = p.ai_risk ? getAiRiskTier(p.ai_risk) : scoreToRiskTier(pNum);
+
+    return {
+      captureRef: p,
+      filename: p.filename || `Capture #${idx + 1}`,
+      order: idx + 1,
+      score: pScore,
+      label: pLabel,
+      packets: p.total_packets ?? (pSessions.length * 148),
+      sessionsCount: pSessions.length,
+      protocol: pSessions[0]?.protocol || "SMTP"
+    };
+  });
+
+  // SVG Chart Geometry
+  const chartW = 760;
+  const chartH = 190;
+  const padLeft = 55;
+  const padRight = 45;
+  const padTop = 28;
+  const padBottom = 38;
+  const plotW = chartW - padLeft - padRight;
+  const plotH = chartH - padTop - padBottom;
+
+  const getY = (val) => padTop + (1 - Math.max(0, Math.min(100, val)) / 100) * plotH;
+
+  const points = trendData.map((d, i) => {
+    const x = trendData.length === 1
+      ? padLeft + plotW / 2
+      : padLeft + (i / (trendData.length - 1)) * plotW;
+    const y = getY(d.score);
+    return { ...d, x, y };
+  });
+
+  const linePath = points.length > 1
+    ? points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
+    : '';
+
+  const areaPath = points.length > 1
+    ? `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${getY(0).toFixed(1)} L ${points[0].x.toFixed(1)} ${getY(0).toFixed(1)} Z`
+    : '';
+
+  return (
+    <div className="w-full max-w-6xl mx-auto flex flex-col gap-6">
+      {/* ==================================================================== */}
+      {/* PAGE HEADER: TITLE & TOOLBAR CONTROLS                                */}
+      {/* ==================================================================== */}
+      <header className="bg-white dark:bg-slate-900 rounded-xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors duration-150">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">analytics</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#006591] dark:text-sky-400">Enterprise Telemetry</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Cryptographic Security Overview</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Cross-capture cryptographic security posture and AI risk trajectory</p>
+        </div>
+
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={onTriggerUpload}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 dark:bg-slate-800 text-white hover:bg-slate-800 dark:hover:bg-slate-700 active:bg-slate-950 dark:active:bg-slate-600 text-xs font-semibold shadow-xs transition-all duration-150 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">upload_file</span>
+            <span>Upload PCAP</span>
+          </button>
+        </div>
+      </header>
+
+      {/* ==================================================================== */}
+      {/* TOP / FIRST HALF: OVERALL SECURITY RISK & KEY METRICS                */}
+      {/* ==================================================================== */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col lg:flex-row items-center justify-between gap-8 transition-colors duration-150">
+        {/* Left: Visually Dominant Overall Risk Score & Selected PCAP */}
+        <div className="flex items-center gap-6 shrink-0">
+          <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center shrink-0">
+            <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 160 160">
+              <circle cx="80" cy="80" fill="transparent" r="66" stroke={theme === 'dark' ? '#1e293b' : '#F1F5F9'} strokeWidth="10" />
+              <circle
+                cx="80"
+                cy="80"
+                fill="transparent"
+                r="66"
+                stroke={riskGaugeColor}
+                strokeDasharray={circumference}
+                strokeDashoffset={dashOffset}
+                strokeLinecap="round"
+                strokeWidth="10"
+                className="transition-all duration-700 ease-out"
+              />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+              <span className="font-sans text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight leading-none tabular-nums">
+                {currentScore}
+              </span>
+              <span className="font-sans font-medium text-[10px] text-slate-400 dark:text-slate-500 mt-1">/ 100</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 font-sans">
+                Selected PCAP AI Risk
+              </span>
+              <span className="text-[10.5px] text-slate-500 dark:text-slate-400 font-normal font-sans">
+                Secondary ML risk signal; does not override deterministic security findings.
+              </span>
+            </div>
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border tracking-wider uppercase font-sans inline-flex items-center gap-1.5 shadow-2xs ${riskBadgeColor}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${riskDotColor}`}></span>
+                {activeCapture ? `${currentLabel} RISK` : 'NO CAPTURE'}
+              </span>
+              {activeCapture && (
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border tracking-wider uppercase font-sans inline-flex items-center gap-1.5 shadow-2xs ${
+                  isSecureCapture
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isSecureCapture ? 'bg-emerald-600' : 'bg-rose-600'}`}></span>
+                  {statusText} {postureScore != null ? `(${postureScore}/100)` : ''}
+                </span>
+              )}
+            </div>
+            <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
+              {postureLabel}
+            </div>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-semibold text-slate-900 dark:text-white max-w-sm truncate" title={activeCapture?.filename}>
+              <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400 shrink-0">description</span>
+              <span className="truncate">{activeCapture?.filename || 'No capture selected'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Clean Grid of 4 Key Metrics */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full lg:max-w-2xl min-w-0">
+          {/* Metric 1: Captures Analyzed */}
+          <div className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0">
+            <div>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans">Captures</span>
+            </div>
+            <div className="mt-3 flex flex-col min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight">{totalReports}</span>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium mt-0.5 truncate">Analysed</span>
+            </div>
+          </div>
+
+          {/* Metric 2: Secure Captures */}
+          <div className="p-4 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/50 shadow-2xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-150 flex flex-col justify-between min-w-0">
+            <div>
+              <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-400 uppercase tracking-wider font-sans">Secure</span>
+            </div>
+            <div className="mt-3 flex items-baseline justify-between gap-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-emerald-700 dark:text-emerald-400 font-sans tabular-nums leading-tight">{secureReports}</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 font-sans tabular-nums shrink-0">
+                {securePct}%
+              </span>
+            </div>
+          </div>
+
+          {/* Metric 3: Insecure Captures */}
+          <div className="p-4 rounded-xl bg-rose-50/35 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/50 shadow-2xs hover:border-rose-300 dark:hover:border-rose-700 transition-all duration-150 flex flex-col justify-between min-w-0">
+            <div>
+              <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-400 uppercase tracking-wider font-sans">Insecure</span>
+            </div>
+            <div className="mt-3 flex items-baseline justify-between gap-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-rose-700 dark:text-rose-400 font-sans tabular-nums leading-tight">{insecureReports}</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-300 font-sans tabular-nums shrink-0">
+                {insecurePct}%
+              </span>
+            </div>
+          </div>
+
+          {/* Metric 4: Historical Fleet Average AI Risk */}
+          <div className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0">
+            <div>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans">Fleet Avg Risk</span>
+            </div>
+            <div className="mt-3 flex flex-col min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight">
+                {fleetAvgRisk != null ? fleetAvgRisk : "—"}
+              </span>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium mt-0.5 truncate">{totalReports} PCAPs</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ==================================================================== */}
+      {/* SECOND HALF: SECURITY RISK TREND (Dynamic SVG Line Chart)            */}
+      {/* ==================================================================== */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col gap-4 transition-colors duration-150">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-3">
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">trending_up</span>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Security Risk Trend</h2>
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
+              Chronological AI risk trajectory across analyzed captures
+            </span>
+          </div>
+
+          {/* Trend Axis Guidance Legend */}
+          <div className="flex items-center gap-4 text-xs font-medium">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
+              <span className="text-slate-700 dark:text-slate-300">Low Risk (0–20)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+              <span className="text-slate-700 dark:text-slate-300">Moderate (21–50)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-600"></span>
+              <span className="text-slate-700 dark:text-slate-300">High / Critical (&gt;50)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic SVG Chart or Empty State */}
+        {trendData.length === 0 ? (
+          <div className="h-48 flex flex-col items-center justify-center gap-1.5 text-slate-400 dark:text-slate-500 text-xs font-sans font-normal">
+            <span className="material-symbols-outlined text-slate-300 dark:text-slate-600 text-2xl">query_stats</span>
+            <span>No analyzed PCAP capture data available yet</span>
+          </div>
+        ) : (
+          <div className="w-full overflow-x-auto">
+            <div className="min-w-[640px] relative">
+              <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-48 select-none">
+                <defs>
+                  <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#006591" stopOpacity="0.22" />
+                    <stop offset="100%" stopColor="#006591" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+
+                {/* Y-Axis Gridlines & Ticks (100, 75, 50, 25, 0) */}
+                {[100, 75, 50, 25, 0].map((v) => {
+                  const y = getY(v);
+                  return (
+                    <g key={`grid-${v}`}>
+                      <line
+                        x1={padLeft}
+                        y1={y}
+                        x2={chartW - padRight}
+                        y2={y}
+                        stroke={theme === 'dark' ? '#1e293b' : '#f1f5f9'}
+                        strokeDasharray={v === 0 || v === 100 ? "0" : "3 3"}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={padLeft - 10}
+                        y={y + 3.5}
+                        textAnchor="end"
+                        fill="currentColor"
+                        className="text-[10px] font-sans text-slate-400 dark:text-slate-500 font-medium tabular-nums"
+                      >
+                        {v}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Subtle Risk Threshold Guidelines (80, 50, 20) */}
+                <line x1={padLeft} y1={getY(80)} x2={chartW - padRight} y2={getY(80)} stroke="#f43f5e" strokeOpacity="0.22" strokeDasharray="3 3" strokeWidth="1" />
+                <line x1={padLeft} y1={getY(50)} x2={chartW - padRight} y2={getY(50)} stroke="#f59e0b" strokeOpacity="0.22" strokeDasharray="3 3" strokeWidth="1" />
+                <line x1={padLeft} y1={getY(20)} x2={chartW - padRight} y2={getY(20)} stroke="#10b981" strokeOpacity="0.22" strokeDasharray="3 3" strokeWidth="1" />
+
+                {/* Multi-point Trend Line & Area Fill */}
+                {points.length > 1 && (
+                  <>
+                    <path d={areaPath} fill="url(#trendGradient)" />
+                    <path
+                      d={linePath}
+                      fill="none"
+                      stroke={theme === 'dark' ? '#38bdf8' : '#006591'}
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </>
+                )}
+
+                {/* Points & Labels */}
+                {points.map((p, idx) => {
+                  const dotColor = p.score <= 20 ? "#059669" : p.score <= 50 ? "#d97706" : "#dc2626";
+                  const isHovered = hoveredPoint?.order === p.order;
+                  return (
+                    <g
+                      key={`point-${idx}`}
+                      className="cursor-pointer group"
+                      onMouseEnter={() => setHoveredPoint(p)}
+                      onMouseLeave={() => setHoveredPoint(null)}
+                      onClick={() => {
+                        if (onSelectCapture && p.captureRef) {
+                          onSelectCapture(p.captureRef);
+                        }
+                        onNavigate('forensics');
+                      }}
+                    >
+                      <title>{`Capture #${p.order}\nFilename: ${p.filename}\nAI Risk Score: ${p.score}\nRisk Level: ${p.label}`}</title>
+
+                      {/* Pulsing ring for single point or hovered point */}
+                      {(points.length === 1 || isHovered) && (
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r={isHovered ? "10" : "12"}
+                          fill={dotColor}
+                          fillOpacity={isHovered ? "0.3" : "0.2"}
+                          className={points.length === 1 ? "animate-pulse" : ""}
+                        />
+                      )}
+
+                      {/* Point Marker */}
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r={isHovered ? "7" : "5.5"}
+                        fill={dotColor}
+                        stroke={theme === 'dark' ? '#0f172a' : '#ffffff'}
+                        strokeWidth="2"
+                        className="transition-all duration-150"
+                      />
+
+                      {/* Score Value Label */}
+                      <text
+                        x={p.x}
+                        y={p.y - 11}
+                        textAnchor="middle"
+                        fill="currentColor"
+                        className="text-[11px] font-sans font-bold text-slate-900 dark:text-white tabular-nums"
+                      >
+                        {p.score}
+                      </text>
+
+                      {/* Compact X-Axis Capture Identifier (#1, #2, #3...) */}
+                      <text
+                        x={p.x}
+                        y={getY(0) + 20}
+                        textAnchor="middle"
+                        fill="currentColor"
+                        className="text-[10px] font-mono text-slate-500 dark:text-slate-400 font-semibold"
+                      >
+                        #{p.order}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {/* Floating Interactive Tooltip */}
+              {hoveredPoint && (
+                <div
+                  className="absolute pointer-events-none z-20 px-3 py-2 rounded-lg bg-slate-900/95 dark:bg-slate-800/95 text-white border border-slate-700/80 shadow-lg text-xs font-sans -translate-x-1/2 -translate-y-full transition-all duration-75"
+                  style={{
+                    left: `${(hoveredPoint.x / chartW) * 100}%`,
+                    top: `${Math.max(6, (hoveredPoint.y / chartH) * 100 - 8)}%`
+                  }}
+                >
+                  <div className="font-bold font-mono text-sky-400 text-[11px]">Capture #{hoveredPoint.order}</div>
+                  <div className="font-mono text-slate-300 text-[10px] truncate max-w-[220px]" title={hoveredPoint.filename}>
+                    {hoveredPoint.filename}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 pt-1 border-t border-slate-700/60 text-[10px]">
+                    <span>AI Risk Score: <strong className="tabular-nums text-white font-bold">{hoveredPoint.score}</strong></span>
+                    <span className="text-slate-400">·</span>
+                    <span>Risk Level: <strong className={
+                      hoveredPoint.label === 'CRITICAL' || hoveredPoint.label === 'HIGH'
+                        ? 'text-rose-400'
+                        : hoveredPoint.label === 'MODERATE'
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                    }>{hoveredPoint.label}</strong></span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State Banner if only 1 capture */}
+        {trendData.length === 1 && (
+          <div className="flex items-center justify-between gap-2 p-3 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[17px] text-[#006591] dark:text-sky-400">info</span>
+              <span>Analyze additional PCAP captures to view the risk trend across multiple uploads.</span>
+            </div>
+            <button
+              onClick={onTriggerUpload}
+              className="text-xs font-semibold text-[#006591] dark:text-sky-400 hover:underline cursor-pointer"
+            >
+              + Upload New PCAP
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* ==================================================================== */}
+      {/* THIRD PART: PCAP CAPTURE HISTORY (All Analyzed PCAPs)                */}
+      {/* ==================================================================== */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs overflow-hidden transition-colors duration-150">
+        <div className="p-5 sm:p-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">history</span>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">PCAP Capture History</h2>
+          </div>
+          <span className="font-sans text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 font-medium self-start sm:self-auto">
+            {pcapList.length} {pcapList.length === 1 ? 'Capture' : 'Captures'} Logged
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-50/80 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800 text-[11px] uppercase tracking-wider font-sans">
+                <th className="py-3 px-4 sm:px-6">Filename</th>
+                <th className="py-3 px-4">Total Packets</th>
+                <th className="py-3 px-4">Protocols</th>
+                <th className="py-3 px-4">AI Risk Score</th>
+                <th className="py-3 px-4">Risk Level</th>
+                <th className="py-3 px-4">Status</th>
+                <th className="py-3 px-4 sm:px-6 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-sans">
+              {pcapList.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-slate-400 dark:text-slate-500 text-xs font-medium">
+                    No PCAP captures analyzed yet. Upload a capture to begin forensic analysis.
+                  </td>
+                </tr>
+              ) : (
+                pcapList.map((pcap, idx) => {
+                  const pSessions = pcap.sessions || [];
+                  const pScoreVal = pcap.ai_risk?.score != null
+                    ? Number(pcap.ai_risk.score)
+                    : (pSessions[0]?.ai_risk?.score != null
+                      ? Number(pSessions[0].ai_risk.score)
+                      : (pSessions.length > 0
+                        ? Number((pSessions.reduce((acc, s) => acc + (s.ai_risk?.score ?? 0), 0) / pSessions.length).toFixed(1))
+                        : 0));
+                  const pScore = pScoreVal != null ? Number(pScoreVal).toFixed(1) : "0.0";
+                  const pScoreNum = Number(pScore) || 0;
+
+                  const pLabel = pcap.ai_risk
+                    ? getAiRiskTier(pcap.ai_risk)
+                    : (pSessions[0]?.ai_risk
+                      ? getAiRiskTier(pSessions[0].ai_risk)
+                      : scoreToRiskTier(pScoreNum));
+                  const isHighOrCritical = pLabel === "CRITICAL" || pLabel === "HIGH";
+                  const isModerate = pLabel === "MODERATE";
+
+                  const badgeClass = isHighOrCritical
+                    ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800'
+                    : isModerate
+                    ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800'
+                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800';
+
+                  const badgeDotClass = isHighOrCritical
+                    ? 'bg-rose-600'
+                    : isModerate
+                    ? 'bg-amber-500'
+                    : 'bg-emerald-600';
+
+                  const pcapStatus = getPcapSecurityPosture(pcap);
+                  const isSecure = pcapStatus === 'SECURE';
+                  const isIncomplete = pcapStatus === 'INCOMPLETE';
+                  const statusBadgeClass = isSecure
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                    : isIncomplete
+                    ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800'
+                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800';
+                  const statusDotClass = isSecure ? 'bg-emerald-600' : isIncomplete ? 'bg-amber-500' : 'bg-rose-600';
+                  const statusText = isSecure ? 'SECURE' : isIncomplete ? 'INCOMPLETE' : 'INSECURE';
+
+                  // Unique protocols detected in this capture
+                  const protocols = Array.from(new Set(pSessions.map(s => s.protocol).filter(Boolean)));
+                  if (protocols.length === 0) protocols.push("SMTP");
+
+                  const totalPackets = pcap?.total_packets ?? (pSessions.length * 148);
+                  const isActive = (pcap?.capture_id && activeCapture?.capture_id && pcap.capture_id === activeCapture.capture_id)
+                    || (pcap?.filename && activeCapture?.filename && pcap.filename.toLowerCase() === activeCapture.filename.toLowerCase());
+
+                  return (
+                    <tr
+                      key={pcap.capture_id || pcap.filename || `pcap-${idx}`}
+                      onClick={() => {
+                        if (onSelectCapture) onSelectCapture(pcap);
+                        onNavigate('forensics');
+                      }}
+                      className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-all duration-150 cursor-pointer ${
+                        isActive ? 'bg-sky-50/50 dark:bg-sky-950/30 font-medium' : ''
+                      }`}
+                    >
+                      {/* Filename with Active indicator */}
+                      <td className="py-3.5 px-4 sm:px-6">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[16px] text-[#006591] dark:text-sky-400">description</span>
+                          <span className="font-mono text-xs font-semibold text-slate-900 dark:text-white truncate max-w-xs">
+                            {pcap.filename || "capture.pcap"}
+                          </span>
+                          {isActive && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-sans font-semibold bg-sky-100 dark:bg-sky-900/60 text-[#006591] dark:text-sky-300 border border-sky-200 dark:border-sky-700 uppercase tracking-wider">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Total Packets */}
+                      <td className="py-3.5 px-4 font-sans font-medium tabular-nums text-slate-600 dark:text-slate-400 text-xs">
+                        {totalPackets.toLocaleString()}
+                      </td>
+
+                      {/* Protocols */}
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-wrap gap-1">
+                          {protocols.map((proto) => (
+                            <span
+                              key={proto}
+                              className="px-2 py-0.5 rounded font-mono text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                            >
+                              {proto}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* AI Risk Score */}
+                      <td className="py-3.5 px-4 font-sans font-bold tabular-nums text-slate-900 dark:text-white text-xs">
+                        {pScore}/100
+                      </td>
+
+                      {/* Risk Level Badge */}
+                      <td className="py-3.5 px-4">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border tracking-wider uppercase font-sans inline-flex items-center gap-1.5 ${badgeClass}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${badgeDotClass}`}></span>
+                          {pLabel}
+                        </span>
+                      </td>
+
+                      {/* Status Badge */}
+                      <td className="py-3.5 px-4">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border tracking-wider uppercase font-sans inline-flex items-center gap-1.5 ${statusBadgeClass}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass}`}></span>
+                          {statusText}
+                        </span>
+                      </td>
+
+                      {/* Investigate Action Button */}
+                      <td className="py-3.5 px-4 sm:px-6 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onSelectCapture) onSelectCapture(pcap);
+                            onNavigate('forensics');
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-900 dark:text-slate-100 hover:text-white dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-900 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 px-3 py-1.5 rounded-lg transition-all duration-150 shadow-2xs cursor-pointer"
+                        >
+                          <span>Investigate</span>
+                          <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
