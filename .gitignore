@@ -11,3 +11,6 @@ dist/
 *.pcapng
 .DS_Store
 scratch/
+
+frontend/.backup/
+frontend/*_report.pdf
