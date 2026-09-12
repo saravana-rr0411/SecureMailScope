@@ -6,9 +6,17 @@ import logging
 import threading
 from pathlib import Path
 
-# Set up logging early
-LOG_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "SecureMailScope" / "CaptureAgent" / "logs"
+# Ensure project install root is on sys.path so capture_agent package can always be imported
+INSTALL_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(INSTALL_ROOT) not in sys.path:
+    sys.path.insert(0, str(INSTALL_ROOT))
+
+# Set up directories and logging early
+DATA_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "SecureMailScope" / "CaptureAgent"
+LOG_DIR = DATA_DIR / "logs"
+STORAGE_DIR = DATA_DIR / "storage"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 log_file = LOG_DIR / "service.log"
 
 logging.basicConfig(

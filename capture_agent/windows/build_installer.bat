@@ -119,6 +119,18 @@ robocopy "%PROJECT_ROOT%\capture_agent" "%BUILD_DIR%\capture_agent" /E /XD __pyc
 echo [*] Packaging python requirements...
 copy "%PROJECT_ROOT%\capture_agent\requirements.txt" "%BUILD_DIR%\" >nul
 
+echo [*] Checking for Python environment to bundle dependencies...
+where python >nul 2>&1
+if !errorlevel! equ 0 (
+    echo [*] Creating bundled Python virtual environment in %BUILD_DIR%\venv...
+    python -m venv "%BUILD_DIR%\venv"
+    if exist "%BUILD_DIR%\venv\Scripts\python.exe" (
+        echo [*] Installing required packages into bundled venv...
+        "%BUILD_DIR%\venv\Scripts\python.exe" -m pip install --upgrade pip >nul 2>&1
+        "%BUILD_DIR%\venv\Scripts\python.exe" -m pip install -r "%PROJECT_ROOT%\capture_agent\requirements.txt"
+    )
+)
+
 rem ---------------------------------------------------------------------------
 rem 6. Compile with Inno Setup (Fail Closed)
 rem ---------------------------------------------------------------------------

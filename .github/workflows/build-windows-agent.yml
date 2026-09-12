@@ -1,0 +1,114 @@
+name: Build Windows Capture Agent Installer
+
+'on':
+  push:
+    paths:
+      - 'capture_agent/**'
+      - '.github/workflows/build-windows-agent.yml'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish generated installer to GitHub Release'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'GitHub Release tag to publish asset to (e.g. v1.0.0)'
+        required: false
+        type: string
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-installer:
+    name: Build & Validate Windows Installer (.exe)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (64-bit)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      - name: Install Inno Setup Compiler (ISCC)
+        run: choco install innosetup --no-progress
+
+      - name: Verify Build Tools & Environment
+        shell: cmd
+        run: |
+          echo === Python Info ===
+          python --version
+          where python
+          echo === Inno Setup Compiler Info ===
+          if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" (
+            echo Found ISCC at C:\Program Files ^(x86^)\Inno Setup 6\ISCC.exe
+          ) else (
+            where ISCC.exe
+          )
+
+      - name: Build Windows Capture Agent Installer
+        shell: cmd
+        run: |
+          call capture_agent\windows\build_installer.bat
+
+      - name: Validate Generated Installer Binary
+        shell: bash
+        run: |
+          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+
+          if [ ! -f "$INSTALLER_PATH" ]; then
+            echo "::error::Installer binary not found at $INSTALLER_PATH"
+            exit 1
+          fi
+
+          FILE_SIZE=$(wc -c < "$INSTALLER_PATH" | tr -d ' ')
+          echo "Generated Installer: $INSTALLER_PATH"
+          echo "File Size: $FILE_SIZE bytes"
+
+          # Minimum expected size for bundled self-contained payload is > 5 MB (5,000,000 bytes)
+          if [ "$FILE_SIZE" -lt 5000000 ]; then
+            echo "::error::Installer binary appears incomplete or too small ($FILE_SIZE bytes). Expected > 5MB."
+            exit 1
+          fi
+
+          echo "Calculating SHA-256 checksum..."
+          SHA256=$(sha256sum "$INSTALLER_PATH" | awk '{print $1}')
+          echo "SHA-256: $SHA256"
+          echo "SHA256=$SHA256" >> $GITHUB_ENV
+          echo "[SUCCESS] Installer validation passed."
+
+      - name: Upload Installer as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecureMailScopeCaptureAgent-1.0.0-Setup
+          path: dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || 'v1.0.0' }}
+        run: |
+          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+          echo "Publishing $INSTALLER_PATH to release '${RELEASE_TAG}'..."
+
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release '${RELEASE_TAG}' not found. Creating release..."
+            gh release create "${RELEASE_TAG}" "$INSTALLER_PATH" \
+              --title "SecureMailScope ${RELEASE_TAG}" \
+              --notes "Official release of the SecureMailScope Windows Capture Agent standalone installer."
+          else
+            echo "Release '${RELEASE_TAG}' found. Uploading asset with overwrite protection..."
+            gh release upload "${RELEASE_TAG}" "$INSTALLER_PATH" --clobber
+          fi
+
+          echo "[SUCCESS] Published SecureMailScopeCaptureAgent-1.0.0-Setup.exe to GitHub Release '${RELEASE_TAG}'."

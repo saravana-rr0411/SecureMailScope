@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
 
-const WINDOWS_AGENT_DOWNLOAD_URL = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download/SecureMailScopeCaptureAgent-1.0.0-Setup.exe";
-const MACOS_AGENT_DOWNLOAD_URL = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download/SecureMailScopeCaptureAgent-1.0.0.pkg";
 const NPCAP_OFFICIAL_URL = "https://npcap.com/#download";
+
+function getAgentDownloadUrl(platform) {
+  const apiBase = import.meta.env.VITE_API_BASE ?? '';
+  if (platform === 'windows') {
+    return apiBase ? `${apiBase}/api/agent/download/windows` : '/api/agent/download/windows';
+  }
+  return apiBase ? `${apiBase}/api/agent/download/macos` : '/api/agent/download/macos';
+}
 
 function detectClientOS() {
   if (typeof window === 'undefined') return 'windows';
@@ -37,6 +43,13 @@ export default function OverviewScreen({
   const [isRetryingAgent, setIsRetryingAgent] = useState(false);
   const clientOS = detectClientOS();
   const [selectedOsTab, setSelectedOsTab] = useState(() => detectClientOS());
+
+  // Determine connected agent OS and check for mismatch with browser platform
+  const connectedOs = agentInfo?.os ? (agentInfo.os === 'darwin' ? 'macOS' : (agentInfo.os.toLowerCase().includes('win') ? 'Windows' : agentInfo.os)) : null;
+  const isOsMismatch = agentStatus === 'connected' && connectedOs && (
+    (clientOS === 'windows' && connectedOs !== 'Windows') ||
+    (clientOS === 'macos' && connectedOs !== 'macOS')
+  );
 
   // Countdown timer effect for Gmail live capture window
   useEffect(() => {
@@ -290,11 +303,15 @@ export default function OverviewScreen({
             {agentStatus === 'connected' ? (
               <div
                 id="local-agent-status-badge"
-                title={`SecureMailScope Capture Agent v${agentInfo?.version || '1.0'} active on this computer`}
-                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 font-sans text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 tracking-wider uppercase transition-colors"
+                title={isOsMismatch ? `Connected agent is on ${connectedOs}, but your browser is on ${clientOS === 'windows' ? 'Windows' : 'macOS'}. Install local agent to capture from this PC.` : `SecureMailScope Capture Agent v${agentInfo?.version || '1.0'} active on ${connectedOs || 'this computer'}`}
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border font-sans text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                  isOsMismatch
+                    ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+                    : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>Local Agent Connected</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${isOsMismatch ? 'bg-amber-500' : 'bg-emerald-500'} animate-pulse`}></span>
+                <span>{isOsMismatch ? `Agent Connected (${connectedOs}) — Need Windows Agent` : `Local Agent Connected (${connectedOs || 'Active'})`}</span>
               </div>
             ) : agentStatus === 'checking' ? (
               <div
@@ -415,6 +432,46 @@ export default function OverviewScreen({
         </div>
       </header>
 
+      {/* OS MISMATCH WARNING BANNER (Shown when connected agent OS differs from client browser OS) */}
+      {isOsMismatch && (
+        <div
+          id="agent-os-mismatch-banner"
+          className="p-4 sm:p-5 rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50/90 dark:bg-amber-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs text-xs text-amber-950 dark:text-amber-200 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-[22px] text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">warning</span>
+            <div>
+              <p className="font-bold text-sm text-slate-900 dark:text-white">
+                Connected Agent is on {connectedOs} — Windows Agent Needed
+              </p>
+              <p className="text-slate-600 dark:text-slate-300 text-xs mt-0.5 leading-relaxed">
+                The SecureMailScope hub detects an active Capture Agent connected from <strong>{connectedOs}</strong>, but your browser is running on <strong>{clientOS === 'windows' ? 'Windows' : 'macOS'}</strong>. To sniff genuine SMTP packets from this PC, install and run the local Windows Capture Agent.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href={getAgentDownloadUrl('windows')}
+              download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[15px]">download</span>
+              <span>Download Windows Agent</span>
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOsTab('windows');
+                setShowAgentModal(true);
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-amber-200/80 dark:bg-amber-800 text-amber-950 dark:text-amber-100 font-semibold text-xs hover:bg-amber-300 transition-colors cursor-pointer"
+            >
+              Setup Guide
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* CAPTURE AGENT SETUP GUIDANCE BANNER (Shown when agent is not detected) */}
       {agentStatus === 'not_detected' && (
         <div
@@ -458,7 +515,7 @@ export default function OverviewScreen({
                 </a>
                 <a
                   id="btn-download-windows-agent"
-                  href={WINDOWS_AGENT_DOWNLOAD_URL}
+                  href={getAgentDownloadUrl('windows')}
                   download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
                   title="Download SecureMailScope Capture Agent for Windows (.exe)"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
@@ -470,7 +527,7 @@ export default function OverviewScreen({
             ) : (
               <a
                 id="btn-download-macos-agent"
-                href={MACOS_AGENT_DOWNLOAD_URL}
+                href={getAgentDownloadUrl('macos')}
                 download="SecureMailScopeCaptureAgent-1.0.0.pkg"
                 title="Download SecureMailScope Capture Agent for macOS (.pkg)"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
@@ -1185,7 +1242,7 @@ export default function OverviewScreen({
                       Install SecureMailScope Capture Agent
                     </span>
                     <a
-                      href={WINDOWS_AGENT_DOWNLOAD_URL}
+                      href={getAgentDownloadUrl('windows')}
                       download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
                     >
@@ -1218,7 +1275,7 @@ export default function OverviewScreen({
                       Download macOS Installer (.pkg)
                     </span>
                     <a
-                      href={MACOS_AGENT_DOWNLOAD_URL}
+                      href={getAgentDownloadUrl('macos')}
                       download="SecureMailScopeCaptureAgent-1.0.0.pkg"
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
                     >

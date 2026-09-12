@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, status as http_status
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional, Tuple
 import os
@@ -283,6 +283,49 @@ async def agent_status_endpoint():
         }
 
 
+GITHUB_RELEASE_DOWNLOAD_BASE = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download"
+
+
+@app.get("/api/agent/download/{platform_name}")
+def download_agent_package(platform_name: str):
+    """
+    Serves the prebuilt Capture Agent installer package for Windows or macOS.
+    Serves local file from dist/ if present; otherwise seamlessly redirects to the
+    official GitHub Release download asset.
+    """
+    from pathlib import Path
+    target = platform_name.lower().strip()
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
+
+    if target in ("win", "windows", "exe"):
+        exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+        if exe_path.exists():
+            return FileResponse(
+                path=str(exe_path),
+                media_type="application/vnd.microsoft.portable-executable",
+                filename="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+            )
+        return RedirectResponse(
+            url=f"{GITHUB_RELEASE_DOWNLOAD_BASE}/SecureMailScopeCaptureAgent-1.0.0-Setup.exe",
+            status_code=307
+        )
+
+    if target in ("mac", "macos", "darwin", "pkg"):
+        pkg_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.0.pkg"
+        if pkg_path.exists():
+            return FileResponse(
+                path=str(pkg_path),
+                media_type="application/octet-stream",
+                filename="SecureMailScopeCaptureAgent-1.0.0.pkg"
+            )
+        return RedirectResponse(
+            url=f"{GITHUB_RELEASE_DOWNLOAD_BASE}/SecureMailScopeCaptureAgent-1.0.0.pkg",
+            status_code=307
+        )
+
+    raise HTTPException(status_code=400, detail="Invalid platform. Expected 'windows' or 'macos'.")
+
+
 @app.websocket("/ws/agent")
 async def agent_websocket_endpoint(websocket: WebSocket):
     """
@@ -415,11 +458,14 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
 
                 logger.info(f"Received PCAP via WebSocket Bridge: {filename} ({len(pcap_bytes)} bytes)")
             except Exception as ws_err:
-                logger.warning(f"WebSocket Bridge capture failed, falling back to HTTP: {ws_err}")
-                tmp_path = None
-                pcap_raw_bytes = None
+                logger.error(f"WebSocket Bridge capture failed on agent: {ws_err}")
+                # Do not fallback to 127.0.0.1 on Render server; raise the real error
+                raise HTTPException(
+                    status_code=400 if "No SMTP submission packets" in str(ws_err) else 500,
+                    detail=f"Capture Agent error: {str(ws_err)}"
+                )
 
-        # Path 2: Direct HTTP to Capture Agent (fallback)
+        # Path 2: Direct HTTP to Capture Agent (fallback / local development)
         if not tmp_path:
             tmp_path, filename = await request_authentic_pcap(
                 protocol=protocol,
@@ -460,6 +506,8 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
                 logger.warning(f"Supabase storage warning during authentic capture: {storage_err}")
 
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:

@@ -72,8 +72,8 @@ end;
 // Helper function to check if Npcap driver is installed on the target Windows system
 function IsNpcapInstalled(): Boolean;
 begin
-  Result := FileExists(ExpandConstant('{sys}\Npcap\wpcap.dll')) or 
-            FileExists(ExpandConstant('{sys}\wpcap.dll')) or 
+  Result := FileExists(ExpandConstant('{sys}\Npcap\wpcap.dll')) or
+            FileExists(ExpandConstant('{sys}\wpcap.dll')) or
             FileExists(ExpandConstant('{sys}\SysWOW64\Npcap\wpcap.dll')) or
             FileExists(ExpandConstant('{sys}\SysWOW64\wpcap.dll'));
 end;
@@ -156,6 +156,20 @@ begin
   end;
 end;
 
+function IsPythonRuntimeAvailable(): Boolean;
+var
+  PyExe: String;
+  ErrorCode: Integer;
+begin
+  PyExe := GetPythonExe('');
+  if (PyExe <> 'python.exe') and FileExists(PyExe) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := Exec('python.exe', '--version', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
+end;
+
 // Pre-installation check
 function InitializeSetup(): Boolean;
 begin
@@ -169,5 +183,49 @@ begin
   if not IsNpcapInstalled() then
   begin
     Result := 'Npcap packet capture driver is required to install SecureMailScope Capture Agent.';
+    Exit;
+  end;
+  if not IsPythonRuntimeAvailable() then
+  begin
+    Result := 'Python runtime was not detected. Please install Python 3.10+ from https://www.python.org/downloads/ (ensure "Add python.exe to PATH" is checked), then run Setup again.';
+    Exit;
+  end;
+end;
+
+// Post-installation verification: Verify service is healthy on port 9000
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Attempts: Integer;
+  IsHealthy: Boolean;
+  WinHttpReq: Variant;
+begin
+  if CurStep = ssDone then
+  begin
+    IsHealthy := False;
+    for Attempts := 1 to 10 do
+    begin
+      try
+        WinHttpReq := CreateOleObject('WinHttp.WinHttpRequest.5.1');
+        WinHttpReq.SetTimeouts(1000, 1000, 1000, 1000);
+        WinHttpReq.Open('GET', 'http://127.0.0.1:9000/health', False);
+        WinHttpReq.Send();
+        if WinHttpReq.Status = 200 then
+        begin
+          IsHealthy := True;
+          Break;
+        end;
+      except
+      end;
+      Sleep(1000);
+    end;
+
+    if not IsHealthy then
+    begin
+      MsgBox('SecureMailScope Capture Agent service was registered, but the health check at http://127.0.0.1:9000/health did not respond within 10 seconds.' + #13#10 + #13#10 +
+             'Please check the service log file at:' + #13#10 +
+             ExpandConstant('{commonappdata}\SecureMailScope\CaptureAgent\logs\service.log') + #13#10 + #13#10 +
+             'You can inspect or start the service using: sc.exe query SecureMailScopeCaptureAgent',
+             mbError, MB_OK);
+    end;
   end;
 end;

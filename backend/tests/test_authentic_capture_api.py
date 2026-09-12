@@ -191,3 +191,22 @@ def test_download_demo_capture_whitelist():
     assert resp.headers["content-type"] == "application/vnd.tcpdump.pcap"
     assert len(resp.content) > 0
     assert resp.content[:4] in (b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4', b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d')
+
+
+def test_download_agent_package_endpoints():
+    """Verify /api/agent/download/{platform} routes."""
+    # macOS package exists in dist/
+    resp_mac = client.get("/api/agent/download/macos")
+    assert resp_mac.status_code == 200
+    assert "application/octet-stream" in resp_mac.headers["content-type"]
+    assert "SecureMailScopeCaptureAgent-1.0.0.pkg" in resp_mac.headers["content-disposition"]
+
+    # Windows package redirects to official GitHub Release asset or serves file if present in dist/
+    resp_win = client.get("/api/agent/download/windows", follow_redirects=False)
+    assert resp_win.status_code in (200, 307)
+    if resp_win.status_code == 307:
+        assert "SecureMailScopeCaptureAgent-1.0.0-Setup.exe" in resp_win.headers["location"]
+
+    # Invalid platform returns 400
+    resp_invalid = client.get("/api/agent/download/solaris")
+    assert resp_invalid.status_code == 400

@@ -189,6 +189,12 @@ def test_inno_setup_script_configuration():
     assert "WinPcap API-compatible Mode" in content
     assert "Check: IsNpcapInstalled" in content
 
+    # Python runtime verification & post-install health check
+    assert "function IsPythonRuntimeAvailable(): Boolean;" in content
+    assert "CurStepChanged" in content
+    assert "http://127.0.0.1:9000/health" in content
+    assert "service.log" in content
+
 
 def test_build_installer_script_validation():
     """Verify build_installer.bat contains strict prerequisite validation and fail-closed logic."""
@@ -207,6 +213,10 @@ def test_build_installer_script_validation():
     assert "packet_capturer.py" in content
     assert "service.py" in content
 
+    # Virtual environment bundling
+    assert "python -m venv" in content
+    assert "requirements.txt" in content
+
     # SHA-256 hash verification
     assert "certutil -hashfile" in content
     assert "SHA256" in content
@@ -215,6 +225,22 @@ def test_build_installer_script_validation():
     # Output verification and fail-closed handling
     assert "SecureMailScopeCaptureAgent-1.0.0-Setup.exe" in content
     assert "exit /b 1" in content
+
+
+def test_windows_service_install_root_and_paths():
+    """Verify Windows Service module defines INSTALL_ROOT and sets up sys.path and directories."""
+    from capture_agent.windows.service import (
+        INSTALL_ROOT,
+        DATA_DIR,
+        LOG_DIR,
+        STORAGE_DIR
+    )
+    assert INSTALL_ROOT.exists()
+    assert (INSTALL_ROOT / "capture_agent").exists()
+    assert str(INSTALL_ROOT) in sys.path
+    assert "SecureMailScope" in str(DATA_DIR)
+    assert "logs" in str(LOG_DIR)
+    assert "storage" in str(STORAGE_DIR)
 
 
 def test_official_npcap_hashes_file():
@@ -261,3 +287,26 @@ def test_windows_service_env_loading(tmp_path):
     # Also test when file doesn't exist
     with patch.dict(os.environ, {"PROGRAMDATA": str(tmp_path / "nonexistent")}):
         assert load_service_env() is False
+
+
+def test_github_actions_windows_workflow_structure():
+    """Verify GitHub Actions workflow for Windows installer build exists and has correct parameters."""
+    workflow_path = Path(__file__).resolve().parent.parent.parent / ".github" / "workflows" / "build-windows-agent.yml"
+    assert workflow_path.exists(), f"Workflow file not found at {workflow_path}"
+    content = workflow_path.read_text(encoding="utf-8")
+
+    # Runner and triggers
+    assert "runs-on: windows-latest" in content
+    assert "workflow_dispatch:" in content
+    assert "publish_release:" in content
+    assert "release_tag:" in content
+
+    # Build and dependencies
+    assert "choco install innosetup" in content
+    assert "build_installer.bat" in content
+    assert "dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe" in content
+
+    # Validation and artifacts
+    assert "actions/upload-artifact" in content
+    assert "SecureMailScopeCaptureAgent-1.0.0-Setup" in content
+    assert "gh release upload" in content or "gh release create" in content
