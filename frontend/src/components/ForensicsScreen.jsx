@@ -119,11 +119,79 @@ export default function ForensicsScreen({
   const [showSessionBrowser, setShowSessionBrowser] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [protocolFilter, setProtocolFilter] = useState('ALL');
+  const [isDownloadingPcap, setIsDownloadingPcap] = useState(false);
+  const [pcapDownloadError, setPcapDownloadError] = useState(null);
 
   const sessions = capture?.sessions || [];
   const totalSessions = sessions.length;
   const filename = capture?.filename || "capture.pcap";
   const totalPackets = capture?.total_packets ?? (totalSessions * 148);
+
+  const handleDownloadPcap = async () => {
+    if (!capture || isDownloadingPcap) return;
+    const targetId = capture.capture_id || capture.id || capture.filename;
+    if (!targetId) return;
+
+    setIsDownloadingPcap(true);
+    setPcapDownloadError(null);
+
+    const apiBase = import.meta.env.VITE_API_BASE ?? '';
+    const candidateUrls = [];
+    if (capture.pcap_download_url) {
+      candidateUrls.push(
+        capture.pcap_download_url.startsWith('http')
+          ? capture.pcap_download_url
+          : `${apiBase}${capture.pcap_download_url}`
+      );
+    }
+    if (apiBase) {
+      candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(targetId)}`);
+      if (capture.filename && capture.filename !== targetId) {
+        candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(capture.filename)}`);
+      }
+    }
+    candidateUrls.push(`/api/capture/download/${encodeURIComponent(targetId)}`);
+    if (capture.filename && capture.filename !== targetId) {
+      candidateUrls.push(`/api/capture/download/${encodeURIComponent(capture.filename)}`);
+    }
+    if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+      candidateUrls.push(`http://127.0.0.1:8000/api/capture/download/${encodeURIComponent(targetId)}`);
+      if (capture.filename && capture.filename !== targetId) {
+        candidateUrls.push(`http://127.0.0.1:8000/api/capture/download/${encodeURIComponent(capture.filename)}`);
+      }
+    }
+
+    // Deduplicate candidate URLs
+    const uniqueUrls = [...new Set(candidateUrls)];
+
+    let downloaded = false;
+    for (const url of uniqueUrls) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const blob = await res.blob();
+          const downloadUrl = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = capture.pcap_filename || capture.filename || `${targetId}.pcap`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 2000);
+          downloaded = true;
+          break;
+        }
+      } catch (fetchErr) {
+        console.warn(`Failed to download PCAP from ${url}:`, fetchErr);
+      }
+    }
+
+    setIsDownloadingPcap(false);
+    if (!downloaded) {
+      setPcapDownloadError("Raw PCAP file is not available on backend or has expired from cache.");
+      setTimeout(() => setPcapDownloadError(null), 4000);
+    }
+  };
 
   if (!capture || sessions.length === 0) {
     return (
@@ -810,6 +878,20 @@ export default function ForensicsScreen({
               </button>
             )}
 
+            {/* Download Raw Genuine PCAP Button */}
+            <button
+              id="btn-forensics-download-pcap"
+              onClick={handleDownloadPcap}
+              disabled={isDownloadingPcap}
+              title={`Download raw genuine PCAP packet capture (${filename})`}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white border border-transparent text-xs font-semibold transition-all shrink-0 shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${isDownloadingPcap ? 'animate-spin' : ''}`}>
+                {isDownloadingPcap ? 'sync' : 'sim_card_download'}
+              </span>
+              <span>{isDownloadingPcap ? 'Downloading PCAP...' : 'Download PCAP'}</span>
+            </button>
+
             {/* Export Report Dropdown */}
             <div className="relative">
               <button
@@ -856,6 +938,22 @@ export default function ForensicsScreen({
             </div>
           </div>
         </div>
+
+        {/* PCAP Download Error Feedback Alert */}
+        {pcapDownloadError && (
+          <div className="mx-6 mb-3 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px] text-rose-600 dark:text-rose-400 shrink-0">error</span>
+              <span>{pcapDownloadError}</span>
+            </div>
+            <button
+              onClick={() => setPcapDownloadError(null)}
+              className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-200 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[14px]">close</span>
+            </button>
+          </div>
+        )}
 
         {/* Optional Collapsible Session Browser Drawer (For multi-session captures) */}
         {showSessionBrowser && (

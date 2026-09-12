@@ -367,9 +367,25 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
     """
     protocol = "SMTP"
     profile = "secure_tls12"
+    port = None
+    target_host = None
+    duration_seconds = None
+    interface = None
+
     if payload:
         protocol = payload.get("protocol", "SMTP")
         profile = payload.get("profile", "secure_tls12")
+        port = payload.get("port")
+        target_host = payload.get("target_host")
+        duration_seconds = payload.get("duration_seconds")
+        interface = payload.get("interface")
+
+    if (profile and profile.lower() in ("gmail", "submission")) or port == 587:
+        profile = "gmail"
+        protocol = "SMTP"
+        port = 587
+        target_host = target_host or "smtp.gmail.com"
+        duration_seconds = float(duration_seconds or 40.0)
 
     tmp_path = None
     filename = None
@@ -378,9 +394,17 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
         # Path 1: Try WebSocket Bridge (agent connected outbound to this backend)
         if agent_hub.is_agent_online():
             try:
-                logger.info("Attempting capture via WebSocket Bridge...")
-                pending = await agent_hub.request_capture(protocol=protocol, profile=profile)
-                pcap_bytes, filename = await agent_hub.await_capture_result(pending)
+                logger.info(f"Attempting capture via WebSocket Bridge (profile={profile}, port={port})...")
+                pending = await agent_hub.request_capture(
+                    protocol=protocol,
+                    profile=profile,
+                    port=port,
+                    target_host=target_host,
+                    duration_seconds=duration_seconds,
+                    interface=interface,
+                )
+                wait_timeout = (duration_seconds + 20) if duration_seconds else 60
+                pcap_bytes, filename = await agent_hub.await_capture_result(pending, timeout=wait_timeout)
                 pcap_raw_bytes = pcap_bytes
 
                 # Write PCAP bytes to temp file for analysis
@@ -397,7 +421,14 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
 
         # Path 2: Direct HTTP to Capture Agent (fallback)
         if not tmp_path:
-            tmp_path, filename = await request_authentic_pcap(protocol=protocol, profile=profile)
+            tmp_path, filename = await request_authentic_pcap(
+                protocol=protocol,
+                profile=profile,
+                port=port,
+                target_host=target_host,
+                duration_seconds=duration_seconds,
+                interface=interface,
+            )
             try:
                 with open(tmp_path, "rb") as f:
                     pcap_raw_bytes = f.read()

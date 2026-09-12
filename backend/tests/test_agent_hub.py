@@ -343,3 +343,31 @@ class TestGenerateAuthenticWithWSBridge:
         assert info["agent_count"] == 1
 
         run_async(hub.unregister_agent("ws-status-test"))
+
+    def test_request_capture_gmail_profile(self):
+        """request_capture with profile='gmail' should forward port 587 and target_host."""
+        hub = AgentHub()
+        mock_ws = AsyncMock()
+        run_async(hub.register_agent(mock_ws, "agent-gmail-test"))
+
+        pending = run_async(hub.request_capture(
+            protocol="SMTP",
+            profile="gmail",
+            port=587,
+            target_host="smtp.gmail.com",
+            duration_seconds=40.0,
+            interface="en0"
+        ))
+
+        assert pending.agent_id == "agent-gmail-test"
+        assert mock_ws.send_text.called
+
+        sent_payload = json.loads(mock_ws.send_text.call_args[0][0])
+        assert sent_payload["type"] == "capture_request"
+        assert sent_payload["profile"] == "gmail"
+        assert sent_payload["port"] == 587
+        assert sent_payload["target_host"] == "smtp.gmail.com"
+        assert sent_payload["duration_seconds"] == 40.0
+        assert sent_payload["interface"] == "en0"
+
+        run_async(hub.unregister_agent("agent-gmail-test"))

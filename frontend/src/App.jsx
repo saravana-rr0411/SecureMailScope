@@ -307,7 +307,7 @@ export default function App() {
     }
   };
 
-  const handleGenerateAuthenticCapture = async (onStepChange) => {
+  const handleGenerateAuthenticCapture = async (onStepChange, options = {}) => {
     setIsAnalyzing(true);
     setError(null);
 
@@ -315,8 +315,24 @@ export default function App() {
       if (typeof onStepChange === 'function') onStepChange(step);
     };
 
+    const isGmail = options.profile === 'gmail';
+    const payload = isGmail ? {
+      protocol: 'SMTP',
+      profile: 'gmail',
+      port: 587,
+      target_host: 'smtp.gmail.com',
+      duration_seconds: options.duration_seconds || 40
+    } : {
+      protocol: 'SMTP',
+      profile: 'secure_tls12'
+    };
+
     try {
-      updateStep('traffic'); // "Generating Authentic Traffic..."
+      if (isGmail) {
+        updateStep('listening'); // "Capture started. Send your Gmail email through Outlook now."
+      } else {
+        updateStep('traffic'); // "Generating Authentic Traffic..."
+      }
 
       // All capture requests go through the backend, which routes to the agent
       // via WebSocket Bridge (production) or direct HTTP (local dev fallback).
@@ -331,26 +347,36 @@ export default function App() {
       let res = null;
       let lastErr = null;
 
-      const timerCapturing = setTimeout(() => updateStep('capturing'), 600);
-      const timerAnalyzing = setTimeout(() => updateStep('analyzing'), 1400);
+      let timerCapturing = null;
+      let timerAnalyzing = null;
+      if (!isGmail) {
+        timerCapturing = setTimeout(() => updateStep('capturing'), 600);
+        timerAnalyzing = setTimeout(() => updateStep('analyzing'), 1400);
+      }
 
       for (const url of urls) {
         try {
           res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ protocol: 'SMTP', profile: 'secure_tls12' })
+            body: JSON.stringify(payload)
           });
-          if (res.ok) break;
-          const errData = await res.json().catch(() => ({}));
-          lastErr = new Error(errData.detail || `Server returned HTTP ${res.status}`);
+          // An HTTP response was received (e.g. 200, 400, 404, 500).
+          // Do NOT retry fallback URLs — the endpoint is reachable.
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            lastErr = new Error(errData.detail || `Server returned HTTP ${res.status}`);
+          }
+          break;
         } catch (fetchErr) {
+          // Network / transport error (e.g. connection refused, network failure).
+          // Retry the next fallback URL.
           lastErr = fetchErr;
         }
       }
 
-      clearTimeout(timerCapturing);
-      clearTimeout(timerAnalyzing);
+      if (timerCapturing) clearTimeout(timerCapturing);
+      if (timerAnalyzing) clearTimeout(timerAnalyzing);
 
       if (!res || !res.ok) {
         throw lastErr || new Error("Failed to generate authentic PCAP from Capture Agent.");
@@ -457,6 +483,12 @@ export default function App() {
         msg.toLowerCase().includes('networkerror')
       ) {
         setError("Failed to connect to SecureMailScope backend. Please verify that the backend server is running.");
+      } else if (
+        msg.toLowerCase().includes('contains no packets') ||
+        msg.toLowerCase().includes('no smtp submission packets') ||
+        msg.toLowerCase().includes('empty or invalid pcap')
+      ) {
+        setError("No SMTP submission packets detected on TCP port 587 during the capture window. Verify Outlook is configured to send Gmail SMTP through port 587.");
       } else {
         setError(msg || "Failed to generate authentic PCAP.");
       }
@@ -464,6 +496,16 @@ export default function App() {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleCaptureGmail = async (onStepChange) => {
+    return handleGenerateAuthenticCapture(onStepChange, {
+      profile: 'gmail',
+      protocol: 'SMTP',
+      port: 587,
+      target_host: 'smtp.gmail.com',
+      duration_seconds: 40
+    });
   };
 
   const handleExport = (type) => {
@@ -620,6 +662,7 @@ export default function App() {
               onNavigate={setActiveTab}
               onTriggerUpload={triggerUpload}
               onGenerateAuthenticCapture={handleGenerateAuthenticCapture}
+              onCaptureGmail={handleCaptureGmail}
               theme={theme}
             />
           )}

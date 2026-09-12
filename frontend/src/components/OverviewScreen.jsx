@@ -9,16 +9,38 @@ export default function OverviewScreen({
   onNavigate,
   onTriggerUpload,
   onGenerateAuthenticCapture,
+  onCaptureGmail,
   theme = 'light'
 }) {
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const [captureStep, setCaptureStep] = useState('ready'); // 'ready' | 'traffic' | 'capturing' | 'analyzing' | 'complete'
+  const [gmailCaptureStep, setGmailCaptureStep] = useState('ready'); // 'ready' | 'listening' | 'analyzing' | 'complete'
+  const [gmailCountdown, setGmailCountdown] = useState(40);
 
   // Local Capture Agent connectivity state (checked live against GET http://127.0.0.1:9000/health)
   const [agentStatus, setAgentStatus] = useState('checking'); // 'checking' | 'connected' | 'not_detected'
   const [agentInfo, setAgentInfo] = useState(null);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [isRetryingAgent, setIsRetryingAgent] = useState(false);
+
+  // Countdown timer effect for Gmail live capture window
+  useEffect(() => {
+    let timer = null;
+    if (gmailCaptureStep === 'listening') {
+      timer = setInterval(() => {
+        setGmailCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [gmailCaptureStep]);
 
   // Check agent connectivity via backend API (works in all browsers: HTTPS→HTTPS)
   // Falls back to direct localhost check for local development
@@ -332,8 +354,75 @@ export default function OverviewScreen({
               </span>
             </button>
           )}
+
+          {onCaptureGmail && (
+            <button
+              id="btn-capture-real-gmail"
+              onClick={async () => {
+                if (gmailCaptureStep !== 'ready' && gmailCaptureStep !== 'complete') return;
+                setGmailCountdown(40);
+                if (agentStatus === 'not_detected') {
+                  const isOnline = await checkAgentHealth();
+                  if (!isOnline) {
+                    setShowAgentModal(true);
+                    return;
+                  }
+                }
+                try {
+                  await onCaptureGmail(setGmailCaptureStep);
+                  setTimeout(() => {
+                    setGmailCaptureStep('ready');
+                    setGmailCountdown(0);
+                  }, 4000);
+                } catch {
+                  setGmailCaptureStep('ready');
+                  setGmailCountdown(0);
+                }
+              }}
+              disabled={gmailCaptureStep !== 'ready' && gmailCaptureStep !== 'complete'}
+              title="Start live TCP port 587 capture on active network interface (en0) and send real email via Outlook"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#ea4335] hover:bg-[#d93025] active:bg-[#c5221f] text-white text-xs font-semibold shadow-xs transition-all duration-150 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${gmailCaptureStep !== 'ready' && gmailCaptureStep !== 'complete' ? 'animate-spin' : ''}`}>
+                {gmailCaptureStep === 'listening' && 'sensors'}
+                {gmailCaptureStep === 'analyzing' && 'query_stats'}
+                {gmailCaptureStep === 'complete' && 'check_circle'}
+                {(gmailCaptureStep === 'ready' || (!['listening', 'analyzing', 'complete'].includes(gmailCaptureStep))) && 'mail'}
+              </span>
+              <span>
+                {gmailCaptureStep === 'listening' && `Listening on port 587 (${gmailCountdown}s)...`}
+                {gmailCaptureStep === 'analyzing' && 'Analyzing Gmail Traffic...'}
+                {gmailCaptureStep === 'complete' && 'Gmail PCAP Complete!'}
+                {gmailCaptureStep === 'ready' && 'Capture Real Gmail SMTP'}
+              </span>
+            </button>
+          )}
         </div>
       </header>
+
+      {/* Active Live Gmail Capture Notification Banner */}
+      {gmailCaptureStep === 'listening' && (
+        <div id="gmail-capture-active-banner" className="mb-4 p-4 rounded-xl border border-red-300 dark:border-red-700/60 bg-red-50/90 dark:bg-red-950/40 flex items-center justify-between gap-4 shadow-sm animate-pulse">
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-3.5 w-3.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500"></span>
+            </span>
+            <div>
+              <p className="text-xs font-bold text-red-950 dark:text-red-200">
+                Capture started. Send your Gmail email through Outlook now.
+              </p>
+              <p className="text-[11px] text-red-700 dark:text-red-300">
+                tcpdump is actively filtering port 587 (en0) for outbound TLS traffic to smtp.gmail.com
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 font-mono text-xs font-bold px-3 py-1.5 rounded-lg bg-white dark:bg-red-900/60 text-red-700 dark:text-red-200 border border-red-200 dark:border-red-700 shadow-xs">
+            <span className="material-symbols-outlined text-[15px] animate-spin">timer</span>
+            <span>{gmailCountdown}s window</span>
+          </div>
+        </div>
+      )}
 
       {/* ==================================================================== */}
       {/* TOP / FIRST HALF: OVERALL SECURITY RISK & KEY METRICS                */}

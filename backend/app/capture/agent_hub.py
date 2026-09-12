@@ -207,9 +207,14 @@ class AgentHub:
         self,
         protocol: str = "SMTP",
         profile: str = "secure_tls12",
+        port: Optional[int] = None,
+        target_host: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+        interface: Optional[str] = None,
     ) -> PendingCapture:
         """
         Dispatches a capture request to an available agent.
+        Supports both local test captures (2525) and real external captures (e.g. Gmail 587).
         Returns a PendingCapture whose result_event will be set when complete.
         """
         # Find an available (not busy, not stale) agent
@@ -238,16 +243,26 @@ class AgentHub:
             target_agent.is_busy = True
 
         # Send capture command to agent
-        command = json.dumps({
+        msg_payload: Dict[str, Any] = {
             "type": "capture_request",
             "id": request_id,
             "protocol": protocol,
             "profile": profile,
-        })
+        }
+        if port is not None:
+            msg_payload["port"] = port
+        if target_host is not None:
+            msg_payload["target_host"] = target_host
+        if duration_seconds is not None:
+            msg_payload["duration_seconds"] = duration_seconds
+        if interface is not None:
+            msg_payload["interface"] = interface
+
+        command = json.dumps(msg_payload)
 
         try:
             await target_agent.websocket.send_text(command)
-            logger.info(f"Dispatched capture request {request_id} to agent {target_agent.agent_id}")
+            logger.info(f"Dispatched capture request {request_id} (profile={profile}, port={port}) to agent {target_agent.agent_id}")
         except Exception as e:
             async with self._lock:
                 self._pending_captures.pop(request_id, None)
@@ -256,21 +271,26 @@ class AgentHub:
 
         return pending
 
-    async def await_capture_result(self, pending: PendingCapture) -> tuple:
+    async def await_capture_result(
+        self,
+        pending: PendingCapture,
+        timeout: Optional[float] = None
+    ) -> tuple:
         """
         Waits for the capture to complete and returns (pcap_bytes, filename).
         Raises RuntimeError on timeout or error.
         """
+        wait_timeout = timeout or CAPTURE_REQUEST_TIMEOUT
         try:
             await asyncio.wait_for(
                 pending.result_event.wait(),
-                timeout=CAPTURE_REQUEST_TIMEOUT
+                timeout=wait_timeout
             )
         except asyncio.TimeoutError:
             async with self._lock:
                 self._pending_captures.pop(pending.request_id, None)
             raise RuntimeError(
-                f"Capture request {pending.request_id} timed out after {CAPTURE_REQUEST_TIMEOUT}s."
+                f"Capture request {pending.request_id} timed out after {wait_timeout}s."
             )
 
         # Clean up

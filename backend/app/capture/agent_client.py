@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import tempfile
 import httpx
@@ -68,7 +69,11 @@ async def get_capture_agent_status() -> Dict[str, Any]:
 
 async def request_authentic_pcap(
     protocol: str = "SMTP",
-    profile: str = "secure_tls12"
+    profile: str = "secure_tls12",
+    port: Optional[int] = None,
+    target_host: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
+    interface: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Calls the Capture Agent to execute a live, authentic packet capture session.
@@ -84,7 +89,7 @@ async def request_authentic_pcap(
 
     agent_url = get_capture_agent_url()
     api_key = get_capture_agent_api_key()
-    timeout_sec = get_capture_agent_timeout()
+    timeout_sec = (duration_seconds + 15.0) if duration_seconds else get_capture_agent_timeout()
 
     headers = {
         "Content-Type": "application/json"
@@ -92,11 +97,19 @@ async def request_authentic_pcap(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = {
+    payload: Dict[str, Any] = {
         "protocol": protocol,
         "profile": profile,
         "timeout_seconds": timeout_sec
     }
+    if port is not None:
+        payload["port"] = port
+    if target_host is not None:
+        payload["target_host"] = target_host
+    if duration_seconds is not None:
+        payload["duration_seconds"] = duration_seconds
+    if interface is not None:
+        payload["interface"] = interface
 
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap", prefix="sms_auth_cap_")
     tmp_path = tmp_file.name
@@ -120,9 +133,16 @@ async def request_authentic_pcap(
                     )
                 if response.status_code != 200:
                     err_text = await response.aread()
-                    raise RuntimeError(
-                        f"Capture Agent error ({response.status_code}): {err_text.decode('utf-8', errors='replace')}"
-                    )
+                    detail_msg = err_text.decode('utf-8', errors='replace')
+                    try:
+                        err_json = json.loads(detail_msg)
+                        if isinstance(err_json, dict) and "detail" in err_json:
+                            detail_msg = str(err_json["detail"])
+                    except Exception:
+                        pass
+                    if response.status_code == 400:
+                        raise ValueError(detail_msg)
+                    raise RuntimeError(f"Capture Agent error ({response.status_code}): {detail_msg}")
 
                 # Extract filename from header or fallback
                 filename = response.headers.get("X-Capture-Filename")

@@ -214,16 +214,6 @@ class WebSocketBridge:
                 return
 
             async with capture_lock:
-                timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-                filename = f"authentic_{protocol.lower()}_tls_{timestamp_str}.pcap"
-                output_dir = PCAP_STORAGE_DIR
-                output_dir.mkdir(parents=True, exist_ok=True)
-                output_pcap_path = str(output_dir / filename)
-
-                cert_material = None
-                server = None
-                capturer = None
-
                 req_data = data or {}
                 target_port = req_data.get("port")
                 interface = req_data.get("interface")
@@ -236,6 +226,20 @@ class WebSocketBridge:
                     (protocol and protocol.upper() in ("GMAIL", "SUBMISSION"))
                 )
 
+                timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+                filename = (
+                    f"authentic_gmail_smtp_submission_{timestamp_str}.pcap"
+                    if is_gmail_mode
+                    else f"authentic_{protocol.lower()}_tls_{timestamp_str}.pcap"
+                )
+                output_dir = PCAP_STORAGE_DIR
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_pcap_path = str(output_dir / filename)
+
+                cert_material = None
+                server = None
+                capturer = None
+
                 try:
                     if is_gmail_mode:
                         # Live external Gmail / mail submission capture mode (e.g. from Outlook / Mail client)
@@ -245,7 +249,7 @@ class WebSocketBridge:
                             interface=interface or get_capture_interface([587]),
                             host=target_host
                         )
-                        duration = duration_seconds or 20.0
+                        duration = duration_seconds or 40.0
                         logger.info(f"WS Bridge: Capturing live Gmail SMTP submission traffic on port 587 ({capturer.interface}) for {duration}s...")
                         capturer.start(settle_delay=0.2)
                         await asyncio.sleep(duration)
@@ -308,11 +312,16 @@ class WebSocketBridge:
 
                 # Read the PCAP file
                 pcap_path = Path(output_pcap_path)
-                if not pcap_path.exists() or pcap_path.stat().st_size < 24:
+                if not pcap_path.exists() or pcap_path.stat().st_size <= 24:
+                    err_msg = (
+                        "No SMTP submission packets detected on TCP port 587 during the capture window. Please ensure your email is sent through Outlook while capture is active."
+                        if is_gmail_mode else
+                        "Capture produced empty or invalid PCAP file."
+                    )
                     await ws.send(json.dumps({
                         "type": "capture_error",
                         "id": request_id,
-                        "error": "Capture produced empty or invalid PCAP file.",
+                        "error": err_msg,
                     }))
                     return
 

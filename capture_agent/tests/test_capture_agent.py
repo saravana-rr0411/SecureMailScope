@@ -375,7 +375,7 @@ def test_production_vercel_origin_and_private_network_preflight():
 
 def test_gmail_capture_endpoint_dispatch():
     """Verify /api/v1/capture/generate correctly identifies Gmail submission mode on port 587."""
-    fake_pcap_header = b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01\x00\x00\x00"
+    fake_pcap_header = b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01\x00\x00\x00" + b"\x00" * 40
 
     created_capturers = []
     original_init = PacketCapturer.__init__
@@ -408,3 +408,89 @@ def test_gmail_capture_endpoint_dispatch():
         assert len(resp.content) >= 24
         assert mock_start.called
         assert mock_stop.called
+
+
+def test_gmail_mode_does_not_start_local_smtp_server():
+    """Verify that in Gmail mode (profile='gmail'), local mock SMTP server is NOT started."""
+    fake_pcap_header = b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01\x00\x00\x00" + b"\x00" * 30
+
+    created_capturers = []
+    original_init = PacketCapturer.__init__
+
+    def tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created_capturers.append(self)
+
+    def fake_start(*args, **kwargs):
+        if created_capturers:
+            with open(created_capturers[-1].output_pcap_path, "wb") as f:
+                f.write(fake_pcap_header)
+
+    with patch.object(PacketCapturer, "__init__", tracking_init), \
+         patch.object(PacketCapturer, "start", side_effect=fake_start), \
+         patch.object(PacketCapturer, "stop"), \
+         patch("capture_agent.main.AuthenticSmtpServer") as mock_server, \
+         patch("capture_agent.main.generate_test_certificate") as mock_cert:
+
+        resp = client.post(
+            "/api/v1/capture/generate",
+            json={
+                "protocol": "SMTP",
+                "profile": "gmail",
+                "duration_seconds": 0.05
+            },
+            headers={"Authorization": f"Bearer {CAPTURE_AGENT_SECRET_KEY}"}
+        )
+
+        assert resp.status_code == 200
+        # CRITICAL VERIFICATION: Local mock server and cert MUST NOT be started/generated in Gmail mode
+        assert not mock_server.called
+        assert not mock_cert.called
+
+        # Verify capturer targeted port 587
+        assert len(created_capturers) > 0
+        assert created_capturers[-1].port == 587
+
+
+def test_port_2525_profile_remains_unchanged():
+    """Verify standard profile='secure_tls12' / port 2525 still triggers local mock server flow."""
+    fake_pcap_header = b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01\x00\x00\x00" + b"\x00" * 30
+
+    created_capturers = []
+    original_init = PacketCapturer.__init__
+
+    def tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created_capturers.append(self)
+
+    def fake_start(*args, **kwargs):
+        if created_capturers:
+            with open(created_capturers[-1].output_pcap_path, "wb") as f:
+                f.write(fake_pcap_header)
+
+    mock_server_instance = MagicMock()
+    mock_server_instance.actual_port = 2525
+
+    with patch.object(PacketCapturer, "__init__", tracking_init), \
+         patch.object(PacketCapturer, "start", side_effect=fake_start), \
+         patch.object(PacketCapturer, "stop"), \
+         patch("capture_agent.main.AuthenticSmtpServer", return_value=mock_server_instance) as mock_server, \
+         patch("capture_agent.main.AuthenticSmtpClient") as mock_client, \
+         patch("capture_agent.main.generate_test_certificate") as mock_cert:
+
+        resp = client.post(
+            "/api/v1/capture/generate",
+            json={
+                "protocol": "SMTP",
+                "profile": "secure_tls12",
+                "port": 2525
+            },
+            headers={"Authorization": f"Bearer {CAPTURE_AGENT_SECRET_KEY}"}
+        )
+
+        assert resp.status_code == 200
+        # In port 2525 demo mode, local server and cert MUST be started
+        assert mock_server.called
+        assert mock_cert.called
+        assert mock_client.called
+        assert created_capturers[-1].port == 2525
