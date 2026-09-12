@@ -6,19 +6,36 @@ from typing import Dict, Any, Tuple, Optional
 
 logger = logging.getLogger("securemailscope.agent_client")
 
-CAPTURE_AGENT_URL = os.environ.get("CAPTURE_AGENT_URL", "").rstrip("/")
+from dotenv import load_dotenv
+load_dotenv()
+
+CAPTURE_AGENT_URL = os.environ.get("CAPTURE_AGENT_URL", "")
 CAPTURE_AGENT_API_KEY = os.environ.get("CAPTURE_AGENT_API_KEY", "")
 CAPTURE_AGENT_TIMEOUT = float(os.environ.get("CAPTURE_AGENT_TIMEOUT_SECONDS", "30.0"))
 
+def get_capture_agent_url() -> str:
+    # If explicitly patched or set to empty in tests/env, respect empty string
+    if "CAPTURE_AGENT_URL" in os.environ and os.environ["CAPTURE_AGENT_URL"] == "":
+        return ""
+    if not CAPTURE_AGENT_URL and "CAPTURE_AGENT_URL" in os.environ and os.environ["CAPTURE_AGENT_URL"] == "":
+        return ""
+    return (CAPTURE_AGENT_URL or os.environ.get("CAPTURE_AGENT_URL") or "http://127.0.0.1:9000").rstrip("/")
+
+def get_capture_agent_api_key() -> str:
+    return CAPTURE_AGENT_API_KEY or os.environ.get("CAPTURE_AGENT_API_KEY", "sms-capture-secret-dev-key")
+
+def get_capture_agent_timeout() -> float:
+    return float(os.environ.get("CAPTURE_AGENT_TIMEOUT_SECONDS", str(CAPTURE_AGENT_TIMEOUT or 30.0)))
 
 def is_capture_agent_configured() -> bool:
     """Checks if Capture Agent URL is configured in environment."""
-    return bool(CAPTURE_AGENT_URL)
+    return bool(get_capture_agent_url())
 
 
 async def get_capture_agent_status() -> Dict[str, Any]:
     """Queries health and readiness of the remote Capture Agent."""
-    if not is_capture_agent_configured():
+    agent_url = get_capture_agent_url()
+    if not agent_url:
         return {
             "configured": False,
             "status": "NOT_CONFIGURED",
@@ -27,7 +44,7 @@ async def get_capture_agent_status() -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{CAPTURE_AGENT_URL}/health")
+            resp = await client.get(f"{agent_url}/health")
             if resp.status_code == 200:
                 data = resp.json()
                 return {
@@ -41,7 +58,7 @@ async def get_capture_agent_status() -> Dict[str, Any]:
                 "message": f"Agent responded with HTTP {resp.status_code}: {resp.text}"
             }
     except Exception as e:
-        logger.warning(f"Failed to reach Capture Agent at {CAPTURE_AGENT_URL}: {e}")
+        logger.warning(f"Failed to reach Capture Agent at {agent_url}: {e}")
         return {
             "configured": True,
             "status": "OFFLINE",
@@ -65,27 +82,31 @@ async def request_authentic_pcap(
             "Please configure CAPTURE_AGENT_URL and CAPTURE_AGENT_API_KEY in the backend environment."
         )
 
+    agent_url = get_capture_agent_url()
+    api_key = get_capture_agent_api_key()
+    timeout_sec = get_capture_agent_timeout()
+
     headers = {
         "Content-Type": "application/json"
     }
-    if CAPTURE_AGENT_API_KEY:
-        headers["Authorization"] = f"Bearer {CAPTURE_AGENT_API_KEY}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
         "protocol": protocol,
         "profile": profile,
-        "timeout_seconds": CAPTURE_AGENT_TIMEOUT
+        "timeout_seconds": timeout_sec
     }
 
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap", prefix="sms_auth_cap_")
     tmp_path = tmp_file.name
 
     try:
-        async with httpx.AsyncClient(timeout=CAPTURE_AGENT_TIMEOUT) as client:
-            logger.info(f"Dispatching authentic capture request to {CAPTURE_AGENT_URL}/api/v1/capture/generate...")
+        async with httpx.AsyncClient(timeout=timeout_sec) as client:
+            logger.info(f"Dispatching authentic capture request to {agent_url}/api/v1/capture/generate...")
             async with client.stream(
                 "POST",
-                f"{CAPTURE_AGENT_URL}/api/v1/capture/generate",
+                f"{agent_url}/api/v1/capture/generate",
                 json=payload,
                 headers=headers
             ) as response:
