@@ -327,7 +327,7 @@ export default function OverviewScreen({
                 {captureStep === 'traffic' && 'Generating Authentic Traffic...'}
                 {captureStep === 'capturing' && 'Capturing Packets...'}
                 {captureStep === 'analyzing' && 'Analyzing PCAP...'}
-                {captureStep === 'complete' && 'Capture Complete!'}
+                {captureStep === 'complete' && 'PCAP Downloaded & Complete!'}
                 {captureStep === 'ready' && 'Generate Authentic PCAP'}
               </span>
             </button>
@@ -393,9 +393,44 @@ export default function OverviewScreen({
             <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
               {postureLabel}
             </div>
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-semibold text-slate-900 dark:text-white max-w-sm truncate" title={activeCapture?.filename}>
-              <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400 shrink-0">description</span>
-              <span className="truncate">{activeCapture?.filename || 'No capture selected'}</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-semibold text-slate-900 dark:text-white max-w-sm truncate" title={activeCapture?.filename}>
+                <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400 shrink-0">description</span>
+                <span className="truncate">{activeCapture?.filename || 'No capture selected'}</span>
+              </div>
+              {(activeCapture?.pcap_base64 || activeCapture?.pcap_download_url || (activeCapture?.capture_source === 'AUTHENTIC_AUTO_CAPTURE' && activeCapture?.capture_id)) && (
+                <button
+                  type="button"
+                  id="btn-download-selected-pcap"
+                  onClick={() => {
+                    const apiBase = import.meta.env.VITE_API_BASE ?? '';
+                    if (activeCapture.pcap_base64) {
+                      const binaryString = window.atob(activeCapture.pcap_base64);
+                      const bytes = new Uint8Array(binaryString.length);
+                      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+                      const blob = new Blob([bytes], { type: 'application/vnd.tcpdump.pcap' });
+                      const url = window.URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = activeCapture.pcap_filename || activeCapture.filename || 'authentic_capture.pcap';
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      setTimeout(() => window.URL.revokeObjectURL(url), 1500);
+                    } else {
+                      const dlUrl = activeCapture.pcap_download_url
+                        ? (activeCapture.pcap_download_url.startsWith('http') ? activeCapture.pcap_download_url : `${apiBase}${activeCapture.pcap_download_url}`)
+                        : `${apiBase}/api/capture/download/${activeCapture.capture_id || activeCapture.filename}`;
+                      window.open(dlUrl, '_blank');
+                    }
+                  }}
+                  title="Download genuine .pcap file"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors cursor-pointer border border-slate-200 dark:border-slate-700 shadow-2xs"
+                >
+                  <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400">download</span>
+                  <span>Download PCAP</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

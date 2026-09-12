@@ -127,6 +127,18 @@ def test_generate_authentic_capture_success_flow():
             assert s0.get("protocol") == "SMTP"
             assert s0.get("tls", {}).get("detected") is True
 
+            # Verify genuine PCAP download payload is present
+            import base64
+            assert "pcap_base64" in data
+            assert data["pcap_filename"] == mock_filename
+            assert data["pcap_size_bytes"] == os.path.getsize(SAMPLE_PCAP)
+            assert data["pcap_download_url"] == f"/api/capture/download/{data['capture_id']}"
+
+            # Verify decoded binary starts with valid PCAP global header
+            pcap_bytes = base64.b64decode(data["pcap_base64"])
+            assert len(pcap_bytes) == os.path.getsize(SAMPLE_PCAP)
+            assert pcap_bytes[:4] in (b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4', b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d', b'\x0a\x0d\x0d\x0a')
+
             # Verify save_analysis_result was called
             if mock_save.called:
                 saved_arg = mock_save.call_args[0][0]
@@ -134,3 +146,48 @@ def test_generate_authentic_capture_success_flow():
 
             # Verify temporary file was cleaned up
             assert not os.path.exists(tmp.name)
+
+
+def test_download_capture_endpoint_after_capture():
+    """Verify /api/capture/download/{capture_id} returns genuine PCAP binary with proper headers."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap")
+    shutil.copyfile(SAMPLE_PCAP, tmp.name)
+    tmp.close()
+
+    mock_filename = "authentic_smtp_tls_20260912_123000.pcap"
+
+    async def mock_request(*args, **kwargs):
+        return tmp.name, mock_filename
+
+    with patch("app.main.request_authentic_pcap", side_effect=mock_request):
+        resp = client.post("/api/capture/generate-authentic", json={"protocol": "SMTP"})
+        assert resp.status_code == 200
+        data = resp.json()
+        capture_id = data["capture_id"]
+
+    # Now download the capture via the download endpoint
+    dl_resp = client.get(f"/api/capture/download/{capture_id}")
+    assert dl_resp.status_code == 200
+    assert dl_resp.headers["content-type"] == "application/vnd.tcpdump.pcap"
+    assert f'filename="{mock_filename}"' in dl_resp.headers["content-disposition"]
+    assert len(dl_resp.content) == os.path.getsize(SAMPLE_PCAP)
+    assert dl_resp.content[:4] in (b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4', b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d')
+
+
+def test_download_capture_endpoint_security_and_traversal():
+    """Verify download endpoint rejects directory traversal and non-existent IDs."""
+    # Attempt path traversal
+    resp1 = client.get("/api/capture/download/..%2F..%2Fetc%2Fpasswd")
+    assert resp1.status_code in (400, 404)
+
+    resp2 = client.get("/api/capture/download/nonexistent_capture_99999")
+    assert resp2.status_code == 404
+
+
+def test_download_demo_capture_whitelist():
+    """Verify whitelisted demo PCAPs can be downloaded."""
+    resp = client.get("/api/capture/download/secure_tls")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.tcpdump.pcap"
+    assert len(resp.content) > 0
+    assert resp.content[:4] in (b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4', b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d')

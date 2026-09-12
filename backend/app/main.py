@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, status as http_status
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import os
 import shutil
 import tempfile
@@ -8,6 +9,8 @@ import datetime
 import json
 import uuid
 import logging
+import base64
+import re
 from app.capture.pcap_reader import analyze_pcap
 from app.ml.anomaly_detector import detector_instance, create_synthetic_development_baseline
 from app.ml.crypto_risk_scorer import crypto_risk_scorer_instance
@@ -337,6 +340,19 @@ async def agent_websocket_endpoint(websocket: WebSocket):
         await agent_hub.unregister_agent(agent_id)
 
 
+# Storage for recently generated authentic PCAPs and whitelisted captures for download
+_recent_pcaps: Dict[str, Tuple[bytes, str]] = {}
+
+
+def store_pcap_for_download(capture_id: str, filename: str, pcap_bytes: bytes) -> None:
+    """Stores authentic PCAP binary in memory for direct download endpoint."""
+    if len(_recent_pcaps) > 100:
+        oldest_key = next(iter(_recent_pcaps))
+        _recent_pcaps.pop(oldest_key, None)
+    _recent_pcaps[capture_id] = (pcap_bytes, filename)
+    _recent_pcaps[filename] = (pcap_bytes, filename)
+
+
 @app.post("/api/capture/generate-authentic")
 async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] = Body(None)):
     """
@@ -347,7 +363,7 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
     2. Direct HTTP — fallback to direct HTTP call to CAPTURE_AGENT_URL
 
     Streams the genuine PCAP binary, executes the existing forensic analysis pipeline,
-    persists the analysis in Supabase, and returns the result to the frontend.
+    persists the analysis in Supabase, and returns the result with PCAP download data.
     """
     protocol = "SMTP"
     profile = "secure_tls12"
@@ -357,6 +373,7 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
 
     tmp_path = None
     filename = None
+    pcap_raw_bytes = None
     try:
         # Path 1: Try WebSocket Bridge (agent connected outbound to this backend)
         if agent_hub.is_agent_online():
@@ -364,6 +381,7 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
                 logger.info("Attempting capture via WebSocket Bridge...")
                 pending = await agent_hub.request_capture(protocol=protocol, profile=profile)
                 pcap_bytes, filename = await agent_hub.await_capture_result(pending)
+                pcap_raw_bytes = pcap_bytes
 
                 # Write PCAP bytes to temp file for analysis
                 tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap", prefix="sms_ws_cap_")
@@ -375,10 +393,16 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
             except Exception as ws_err:
                 logger.warning(f"WebSocket Bridge capture failed, falling back to HTTP: {ws_err}")
                 tmp_path = None
+                pcap_raw_bytes = None
 
         # Path 2: Direct HTTP to Capture Agent (fallback)
         if not tmp_path:
             tmp_path, filename = await request_authentic_pcap(protocol=protocol, profile=profile)
+            try:
+                with open(tmp_path, "rb") as f:
+                    pcap_raw_bytes = f.read()
+            except Exception as read_err:
+                logger.warning(f"Could not read raw PCAP bytes from {tmp_path}: {read_err}")
 
         # Process through the existing analyze_pcap forensic pipeline
         result = analyze_pcap(tmp_path)
@@ -387,6 +411,14 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
         result["capture_id"] = f"pcap_{filename}"
         result["analyzed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         result["capture_source"] = "AUTHENTIC_AUTO_CAPTURE"
+
+        # Attach genuine PCAP binary download metadata and base64 payload
+        if pcap_raw_bytes:
+            result["pcap_base64"] = base64.b64encode(pcap_raw_bytes).decode("ascii")
+            result["pcap_filename"] = filename
+            result["pcap_size_bytes"] = len(pcap_raw_bytes)
+            result["pcap_download_url"] = f"/api/capture/download/{result['capture_id']}"
+            store_pcap_for_download(result["capture_id"], filename, pcap_raw_bytes)
 
         # Persist into Supabase persistent storage
         if is_supabase_configured():
@@ -412,6 +444,47 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+@app.get("/api/capture/download/{capture_id}")
+def download_capture_endpoint(capture_id: str):
+    """
+    Downloads genuine PCAP binary for a generated authentic capture or whitelisted demo.
+    Validates capture_id against directory traversal attacks.
+    """
+    # Strict validation: alphanumeric, dashes, underscores, dots only; reject path traversal
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", capture_id) or ".." in capture_id:
+        raise HTTPException(status_code=400, detail="Invalid capture identifier.")
+
+    # 1. Check in-memory store for recently captured PCAPs
+    if capture_id in _recent_pcaps:
+        pcap_bytes, filename = _recent_pcaps[capture_id]
+        return Response(
+            content=pcap_bytes,
+            media_type="application/vnd.tcpdump.pcap",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(pcap_bytes)),
+            }
+        )
+
+    # 2. Check demo captures whitelist fallback
+    for demo_key, demo_file in DEMO_CAPTURES_WHITELIST.items():
+        if capture_id in (demo_key, demo_file, f"pcap_{demo_file}"):
+            pcap_path = os.path.join(DATASET_DIR, demo_file)
+            if os.path.exists(pcap_path):
+                with open(pcap_path, "rb") as f:
+                    pcap_bytes = f.read()
+                return Response(
+                    content=pcap_bytes,
+                    media_type="application/vnd.tcpdump.pcap",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{demo_file}"',
+                        "Content-Length": str(len(pcap_bytes)),
+                    }
+                )
+
+    raise HTTPException(status_code=404, detail="Capture file not found or expired.")
 
 
 
