@@ -146,34 +146,55 @@ rem ---------------------------------------------------------------------------
 rem 7. Stage Self-Contained Python Runtime and Packages (Fail Closed)
 rem ---------------------------------------------------------------------------
 echo [*] Determining Python base runtime path...
-set "PY_BASE="
-for /f "delims=" %%P in ('"!PYTHON_EXE!" -c "import sys; print(sys.base_prefix)"') do set "PY_BASE=%%P"
+set "PYTHON_BASE_DIR="
+set "PY_BASE_TMP=%BUILD_DIR%\_pybase.txt"
+"!PYTHON_EXE!" -c "import sys; print(sys.base_prefix)" > "!PY_BASE_TMP!" 2>nul
+if !errorlevel! equ 0 (
+    if exist "!PY_BASE_TMP!" (
+        for /f "usebackq delims=" %%P in ("!PY_BASE_TMP!") do (
+            if not defined PYTHON_BASE_DIR set "PYTHON_BASE_DIR=%%P"
+        )
+        del "!PY_BASE_TMP!" >nul 2>&1
+    )
+)
 
-if not defined PY_BASE (
+if not defined PYTHON_BASE_DIR (
     echo [-] Error: Failed to resolve Python base directory.
     exit /b 1
 )
-echo [+] Python Base Directory: !PY_BASE!
+if not exist "!PYTHON_BASE_DIR!" (
+    echo [-] Error: Resolved Python base directory does not exist: !PYTHON_BASE_DIR!
+    exit /b 1
+)
+set "PY_BASE=!PYTHON_BASE_DIR!"
+echo [+] Python Base Directory: !PYTHON_BASE_DIR!
 
 echo [*] Staging self-contained Python runtime into %BUILD_DIR%\python...
 mkdir "%BUILD_DIR%\python"
-robocopy "!PY_BASE!" "%BUILD_DIR%\python" python*.exe python*.dll vcruntime*.dll /NFL /NDL /NJH /NJS >nul
+robocopy "!PYTHON_BASE_DIR!" "%BUILD_DIR%\python" python*.exe python*.dll vcruntime*.dll msvcp*.dll /NFL /NDL /NJH /NJS >nul
 
-if exist "!PY_BASE!\DLLs" (
-    robocopy "!PY_BASE!\DLLs" "%BUILD_DIR%\python\DLLs" /E /NFL /NDL /NJH /NJS >nul
+if exist "!PYTHON_BASE_DIR!\DLLs" (
+    robocopy "!PYTHON_BASE_DIR!\DLLs" "%BUILD_DIR%\python\DLLs" /E /NFL /NDL /NJH /NJS >nul
 )
-if exist "!PY_BASE!\Lib" (
-    robocopy "!PY_BASE!\Lib" "%BUILD_DIR%\python\Lib" /E /XD test idlelib tkinter turtledemo /NFL /NDL /NJH /NJS >nul
+if exist "!PYTHON_BASE_DIR!\Lib" (
+    robocopy "!PYTHON_BASE_DIR!\Lib" "%BUILD_DIR%\python\Lib" /E /XD test idlelib tkinter turtledemo /NFL /NDL /NJH /NJS >nul
 )
+
+rem Reset errorlevel from robocopy
+ver >nul
 
 set "STAGED_PYTHON=%BUILD_DIR%\python\python.exe"
 if not exist "!STAGED_PYTHON!" (
     echo [-] Error: Staged Python executable not found: !STAGED_PYTHON!
     exit /b 1
 )
+if not exist "%BUILD_DIR%\python\Lib\os.py" (
+    echo [-] Error: Staged Python standard library not found in %BUILD_DIR%\python\Lib
+    exit /b 1
+)
 
-echo [*] Upgrading pip in staged runtime...
-"!STAGED_PYTHON!" -m pip install --upgrade pip setuptools wheel --no-warn-script-location >nul 2>&1
+echo [*] Ensuring pip is initialized in staged runtime...
+"!STAGED_PYTHON!" -m ensurepip --default-pip >nul 2>&1
 
 echo [*] Installing required Capture Agent packages into staged runtime...
 "!STAGED_PYTHON!" -m pip install -r "%PROJECT_ROOT%\capture_agent\requirements.txt" --no-warn-script-location
@@ -185,6 +206,16 @@ if !errorlevel! neq 0 (
 if exist "%BUILD_DIR%\python\Scripts\pywin32_postinstall.py" (
     echo [*] Executing pywin32 post-install registration...
     "!STAGED_PYTHON!" "%BUILD_DIR%\python\Scripts\pywin32_postinstall.py" -install -quiet >nul 2>&1
+)
+if exist "%BUILD_DIR%\python\Lib\site-packages\pywin32_system32" (
+    copy "%BUILD_DIR%\python\Lib\site-packages\pywin32_system32\*.dll" "%BUILD_DIR%\python\" >nul 2>&1
+)
+
+echo [*] Verifying staged Python runtime dependencies...
+"!STAGED_PYTHON!" -c "import fastapi, uvicorn, scapy, win32serviceutil, websockets; print('[+] Staged runtime dependencies verified.')"
+if !errorlevel! neq 0 (
+    echo [-] Error: Staged Python environment failed dependency verification.
+    exit /b 1
 )
 echo [+] Self-contained Python runtime prepared successfully.
 

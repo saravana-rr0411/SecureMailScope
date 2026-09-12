@@ -214,8 +214,17 @@ def test_build_installer_script_validation():
     assert "service.py" in content
 
     # Python runtime and dependency staging
+    assert "PYTHON_BASE_DIR" in content
     assert "requirements.txt" in content
     assert "pip install" in content
+    assert "import fastapi, uvicorn, scapy, win32serviceutil, websockets" in content
+
+    # Verify no multi-quoted for /f commands that trigger CMD quote-stripping bugs
+    for line in content.splitlines():
+        if "for /f" in line and "('" in line:
+            # Must not have multiple pairs of double quotes inside single quotes
+            inner = line[line.find("('") + 2 : line.rfind("')")]
+            assert inner.count('"') <= 2, f"Unsafe multi-quoted for /f command in batch script: {line}"
 
     # SHA-256 hash verification
     assert "certutil -hashfile" in content
