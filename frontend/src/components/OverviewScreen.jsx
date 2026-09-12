@@ -74,16 +74,38 @@ export default function OverviewScreen({
     };
   }, [gmailCaptureStep]);
 
-  // Check agent connectivity via backend API (works in all browsers: HTTPS→HTTPS)
-  // Falls back to direct localhost check for local development
+  // Check agent connectivity:
+  // 1. Authoritative check: Local Capture Agent on http://127.0.0.1:9000/health
+  //    (This directly probes the Capture Agent running on the same PC as the browser)
+  // 2. Fallback check: Backend AgentHub (/api/agent/status?client_os=...)
+  //    (Only accepted if the remote agent matches the client browser OS)
   const checkAgentHealth = async () => {
-    // Determine API base from environment or relative path
-    const apiBase = import.meta.env.VITE_API_BASE ?? '';
-
+    // Priority 1: Probe local machine Capture Agent at http://127.0.0.1:9000/health
     try {
-      // Primary: Check via backend WebSocket hub status (works in Safari/Chrome production)
+      const localController = new AbortController();
+      const localTimeoutId = setTimeout(() => localController.abort(), 2000);
+      const res = await fetch('http://127.0.0.1:9000/health', {
+        method: 'GET',
+        signal: localController.signal
+      });
+      clearTimeout(localTimeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.status === 'OK' || data.can_capture !== undefined)) {
+          setAgentStatus('connected');
+          setAgentInfo(data);
+          return true;
+        }
+      }
+    } catch {
+      // Local agent on 127.0.0.1:9000 not reachable or blocked by browser policy
+    }
+
+    // Priority 2: Fallback to backend WebSocket Hub status for matching OS agent
+    const apiBase = import.meta.env.VITE_API_BASE ?? '';
+    try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
       const backendUrls = [];
       const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
@@ -105,7 +127,9 @@ export default function OverviewScreen({
           clearTimeout(timeoutId);
           if (res.ok) {
             const data = await res.json();
-            if (data && data.status === 'connected') {
+            // Only accept remote agent status if it matches our client OS!
+            // Do NOT let an unrelated remote agent override local availability.
+            if (data && data.status === 'connected' && data.matched_client_os) {
               setAgentStatus('connected');
               setAgentInfo({
                 version: data.version || '1.0.0',
@@ -123,27 +147,6 @@ export default function OverviewScreen({
       clearTimeout(timeoutId);
     } catch {
       // Silently handle errors
-    }
-
-    // Fallback: Direct localhost check (works only in local dev HTTP→HTTP)
-    try {
-      const controller2 = new AbortController();
-      const timeoutId2 = setTimeout(() => controller2.abort(), 2500);
-      const res = await fetch('http://127.0.0.1:9000/health', {
-        method: 'GET',
-        signal: controller2.signal
-      });
-      clearTimeout(timeoutId2);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && (data.status === 'OK' || data.can_capture !== undefined)) {
-          setAgentStatus('connected');
-          setAgentInfo(data);
-          return true;
-        }
-      }
-    } catch {
-      // Offline or unreachable - silently treat as not detected
     }
 
     setAgentStatus('not_detected');
@@ -344,7 +347,7 @@ export default function OverviewScreen({
                 className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 font-sans text-[10px] font-medium text-slate-500 dark:text-slate-400 tracking-wider uppercase hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-                <span>Local Agent Not Detected</span>
+                <span>{clientOS === 'windows' ? 'WINDOWS AGENT NEEDED' : clientOS === 'macos' ? 'MACOS AGENT NEEDED' : 'LOCAL AGENT NEEDED'}</span>
               </button>
             )}
           </div>
