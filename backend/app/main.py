@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, status as http_status
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, Request, Query, status as http_status
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional, Tuple
@@ -28,9 +28,38 @@ from app.capture.agent_client import (
     get_capture_agent_status,
     is_capture_agent_configured,
 )
-from app.capture.agent_hub import agent_hub
+from app.capture.agent_hub import agent_hub, normalize_os
 
 logger = logging.getLogger("securemailscope")
+
+
+def detect_client_os(request: Request, client_os_query: Optional[str] = None) -> str:
+    """
+    Detects client operating system with priority:
+    1. Explicit query parameter (?client_os=windows)
+    2. X-Client-OS request header
+    3. User-Agent header inspection
+    """
+    if client_os_query:
+        norm = normalize_os(client_os_query)
+        if norm != "unknown":
+            return norm
+
+    header_os = request.headers.get("x-client-os") or request.headers.get("x-os")
+    if header_os:
+        norm = normalize_os(header_os)
+        if norm != "unknown":
+            return norm
+
+    ua = request.headers.get("user-agent", "").lower()
+    if "windows" in ua or "win32" in ua or "win64" in ua:
+        return "windows"
+    if "macintosh" in ua or "mac os" in ua or "darwin" in ua:
+        return "macos"
+    if "linux" in ua and "android" not in ua:
+        return "linux"
+
+    return "unknown"
 
 app = FastAPI(title="SecureMailScope MVP")
 
@@ -255,25 +284,30 @@ async def capture_status_endpoint():
 
 
 @app.get("/api/agent/status")
-async def agent_status_endpoint():
+async def agent_status_endpoint(request: Request, client_os: Optional[str] = Query(None)):
     """
     Returns the live connectivity status of the Capture Agent.
-    Used by the frontend to show 'Local Agent Connected' / 'Not Detected' badge.
+    Matches the connected agent to the browser client OS when possible.
     This works across all browsers (Safari, Chrome) because the frontend
     only makes HTTPS requests to this backend, not to localhost.
     """
-    info = agent_hub.get_agent_info()
+    detected_os = detect_client_os(request, client_os)
+    info = agent_hub.get_agent_info(client_os=detected_os)
     if info["online"]:
-        # Surface the first agent's health details for UI display
-        first_agent = info["agents"][0] if info["agents"] else {}
-        health = first_agent.get("health", {})
+        selected = info.get("selected_agent") or (info["agents"][0] if info["agents"] else {})
+        health = selected.get("health", {})
+        agent_os = health.get("os") or selected.get("os", "unknown")
         return {
             "status": "connected",
             "agent": "SecureMailScope Capture Agent",
             "version": health.get("version", "1.0.0"),
-            "os": health.get("os", "unknown"),
+            "os": agent_os,
+            "platform": selected.get("os", "unknown"),
             "can_capture": health.get("can_capture", True),
-            "is_busy": first_agent.get("is_busy", False),
+            "is_busy": selected.get("is_busy", False),
+            "matched_client_os": info.get("matched_client_os", False),
+            "available_platforms": info.get("available_platforms", []),
+            "total_agents": info.get("agent_count", 0),
         }
     else:
         return {
@@ -335,6 +369,7 @@ async def agent_websocket_endpoint(websocket: WebSocket):
     """
     # Extract token from query parameters or Authorization header
     token = websocket.query_params.get("token", "")
+    agent_os = websocket.query_params.get("os", "unknown")
     if not token:
         auth_header = websocket.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
@@ -356,7 +391,7 @@ async def agent_websocket_endpoint(websocket: WebSocket):
 
     # Generate unique agent ID for this connection
     agent_id = f"agent-{uuid.uuid4().hex[:12]}"
-    agent = await agent_hub.register_agent(websocket, agent_id)
+    agent = await agent_hub.register_agent(websocket, agent_id, client_os=agent_os)
 
     try:
         while True:
@@ -397,7 +432,11 @@ def store_pcap_for_download(capture_id: str, filename: str, pcap_bytes: bytes) -
 
 
 @app.post("/api/capture/generate-authentic")
-async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] = Body(None)):
+async def generate_authentic_capture_endpoint(
+    request: Request,
+    payload: Optional[Dict[str, Any]] = Body(None),
+    client_os: Optional[str] = Query(None),
+):
     """
     Triggers an authentic live network packet capture via the dedicated Capture Agent.
 
@@ -414,6 +453,9 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
     target_host = None
     duration_seconds = None
     interface = None
+
+    body_client_os = (payload.get("client_os") or payload.get("os")) if payload else None
+    effective_client_os = detect_client_os(request, client_os or body_client_os)
 
     ports = None
     if payload:
@@ -438,9 +480,9 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
     pcap_raw_bytes = None
     try:
         # Path 1: Try WebSocket Bridge (agent connected outbound to this backend)
-        if agent_hub.is_agent_online():
+        if agent_hub.is_agent_online(client_os=effective_client_os):
             try:
-                logger.info(f"Attempting capture via WebSocket Bridge (profile={profile}, port={port}, ports={ports})...")
+                logger.info(f"Attempting capture via WebSocket Bridge (profile={profile}, port={port}, ports={ports}, client_os={effective_client_os})...")
                 pending = await agent_hub.request_capture(
                     protocol=protocol,
                     profile=profile,
@@ -449,6 +491,7 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
                     target_host=target_host,
                     duration_seconds=duration_seconds,
                     interface=interface,
+                    client_os=effective_client_os,
                 )
                 wait_timeout = (duration_seconds + 20) if duration_seconds else 60
                 pcap_bytes, filename = await agent_hub.await_capture_result(pending, timeout=wait_timeout)

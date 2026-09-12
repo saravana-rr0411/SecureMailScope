@@ -45,7 +45,11 @@ export default function OverviewScreen({
   const [selectedOsTab, setSelectedOsTab] = useState(() => detectClientOS());
 
   // Determine connected agent OS and check for mismatch with browser platform
-  const connectedOs = agentInfo?.os ? (agentInfo.os === 'darwin' ? 'macOS' : (agentInfo.os.toLowerCase().includes('win') ? 'Windows' : agentInfo.os)) : null;
+  const connectedOs = agentInfo?.os ? (
+    agentInfo.os.toLowerCase().includes('mac') || agentInfo.os === 'darwin'
+      ? 'macOS'
+      : (agentInfo.os.toLowerCase().includes('win') ? 'Windows' : agentInfo.os)
+  ) : null;
   const isOsMismatch = agentStatus === 'connected' && connectedOs && (
     (clientOS === 'windows' && connectedOs !== 'Windows') ||
     (clientOS === 'macos' && connectedOs !== 'macOS')
@@ -82,16 +86,20 @@ export default function OverviewScreen({
       const timeoutId = setTimeout(() => controller.abort(), 4000);
 
       const backendUrls = [];
-      if (apiBase) backendUrls.push(`${apiBase}/api/agent/status`);
-      backendUrls.push('/api/agent/status');
+      const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
+      if (apiBase) backendUrls.push(`${apiBase}/api/agent/status${queryParam}`);
+      backendUrls.push(`/api/agent/status${queryParam}`);
       if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        backendUrls.push('http://127.0.0.1:8000/api/agent/status');
+        backendUrls.push(`http://127.0.0.1:8000/api/agent/status${queryParam}`);
       }
 
       for (const url of backendUrls) {
         try {
           const res = await fetch(url, {
             method: 'GET',
+            headers: {
+              'X-Client-OS': clientOS,
+            },
             signal: controller.signal
           });
           clearTimeout(timeoutId);
@@ -128,7 +136,7 @@ export default function OverviewScreen({
       clearTimeout(timeoutId2);
       if (res.ok) {
         const data = await res.json();
-        if (data && data.status === 'OK') {
+        if (data && (data.status === 'OK' || data.can_capture !== undefined)) {
           setAgentStatus('connected');
           setAgentInfo(data);
           return true;
@@ -311,7 +319,13 @@ export default function OverviewScreen({
                 }`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${isOsMismatch ? 'bg-amber-500' : 'bg-emerald-500'} animate-pulse`}></span>
-                <span>{isOsMismatch ? `Agent Connected (${connectedOs}) — Need Windows Agent` : `Local Agent Connected (${connectedOs || 'Active'})`}</span>
+                <span>
+                  {clientOS === 'windows'
+                    ? (connectedOs === 'Windows' ? 'AGENT CONNECTED (WINDOWS)' : 'WINDOWS AGENT NEEDED')
+                    : clientOS === 'macos'
+                    ? (connectedOs === 'macOS' ? 'AGENT CONNECTED (MACOS)' : 'MACOS AGENT NEEDED')
+                    : (isOsMismatch ? `${clientOS.toUpperCase()} AGENT NEEDED` : `AGENT CONNECTED (${(connectedOs || 'ACTIVE').toUpperCase()})`)}
+                </span>
               </div>
             ) : agentStatus === 'checking' ? (
               <div
@@ -442,26 +456,26 @@ export default function OverviewScreen({
             <span className="material-symbols-outlined text-[22px] text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">warning</span>
             <div>
               <p className="font-bold text-sm text-slate-900 dark:text-white">
-                Connected Agent is on {connectedOs} — Windows Agent Needed
+                Connected Agent is on {connectedOs} — {clientOS === 'windows' ? 'Windows' : 'macOS'} Agent Needed
               </p>
               <p className="text-slate-600 dark:text-slate-300 text-xs mt-0.5 leading-relaxed">
-                The SecureMailScope hub detects an active Capture Agent connected from <strong>{connectedOs}</strong>, but your browser is running on <strong>{clientOS === 'windows' ? 'Windows' : 'macOS'}</strong>. To sniff genuine SMTP packets from this PC, install and run the local Windows Capture Agent.
+                The SecureMailScope hub detects an active Capture Agent connected from <strong>{connectedOs}</strong>, but your browser is running on <strong>{clientOS === 'windows' ? 'Windows' : 'macOS'}</strong>. To sniff genuine SMTP packets from this PC, install and run the local {clientOS === 'windows' ? 'Windows' : 'macOS'} Capture Agent.
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href={getAgentDownloadUrl('windows')}
-              download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+              href={getAgentDownloadUrl(clientOS)}
+              download={clientOS === 'windows' ? 'SecureMailScopeCaptureAgent-1.0.0-Setup.exe' : 'SecureMailScopeCaptureAgent-1.0.0.pkg'}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
             >
               <span className="material-symbols-outlined text-[15px]">download</span>
-              <span>Download Windows Agent</span>
+              <span>Download {clientOS === 'windows' ? 'Windows' : 'macOS'} Agent</span>
             </a>
             <button
               type="button"
               onClick={() => {
-                setSelectedOsTab('windows');
+                setSelectedOsTab(clientOS);
                 setShowAgentModal(true);
               }}
               className="px-2.5 py-1.5 rounded-lg bg-amber-200/80 dark:bg-amber-800 text-amber-950 dark:text-amber-100 font-semibold text-xs hover:bg-amber-300 transition-colors cursor-pointer"

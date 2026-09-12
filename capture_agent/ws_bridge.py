@@ -46,9 +46,10 @@ class WebSocketBridge:
         self._heartbeat_task: Optional[asyncio.Task] = None
 
     def _get_connect_url(self) -> str:
-        """Builds the WebSocket URL with authentication token."""
+        """Builds the WebSocket URL with authentication token and agent OS."""
+        from capture_agent.config import get_current_os
         sep = "&" if "?" in self.backend_ws_url else "?"
-        return f"{self.backend_ws_url}{sep}token={self.api_key}"
+        return f"{self.backend_ws_url}{sep}token={self.api_key}&os={get_current_os()}"
 
     async def start(self):
         """Start the WebSocket bridge as a background task."""

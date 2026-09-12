@@ -29,6 +29,20 @@ AGENT_HEARTBEAT_TIMEOUT = 90
 CAPTURE_REQUEST_TIMEOUT = 60
 
 
+def normalize_os(os_name: Optional[str]) -> str:
+    """Normalizes OS string to 'windows', 'macos', 'linux', or 'unknown'."""
+    if not os_name:
+        return "unknown"
+    val = str(os_name).lower().strip()
+    if val in ("darwin", "mac", "macos", "osx", "apple", "ios") or "mac" in val or "darwin" in val:
+        return "macos"
+    if val in ("win", "windows", "win32", "win64", "windows_nt") or val.startswith("win") or "windows" in val:
+        return "windows"
+    if "linux" in val:
+        return "linux"
+    return val
+
+
 @dataclass
 class ConnectedAgent:
     """Represents a single authenticated Capture Agent WebSocket connection."""
@@ -36,8 +50,17 @@ class ConnectedAgent:
     websocket: WebSocket
     connected_at: float
     last_heartbeat: float
+    os: str = "unknown"
     health_info: Dict[str, Any] = field(default_factory=dict)
     is_busy: bool = False
+
+    @property
+    def normalized_os(self) -> str:
+        if self.os and self.os != "unknown":
+            return normalize_os(self.os)
+        if self.health_info and "os" in self.health_info:
+            return normalize_os(self.health_info["os"])
+        return "unknown"
 
 
 @dataclass
@@ -79,7 +102,12 @@ class AgentHub:
 
         return hmac.compare_digest(token.encode("utf-8"), expected_key.encode("utf-8"))
 
-    async def register_agent(self, websocket: WebSocket, agent_id: str) -> ConnectedAgent:
+    async def register_agent(
+        self,
+        websocket: WebSocket,
+        agent_id: str,
+        client_os: str = "unknown"
+    ) -> ConnectedAgent:
         """Registers a newly authenticated agent connection."""
         now = time.time()
         agent = ConnectedAgent(
@@ -87,6 +115,7 @@ class AgentHub:
             websocket=websocket,
             connected_at=now,
             last_heartbeat=now,
+            os=normalize_os(client_os),
         )
         async with self._lock:
             # If an agent with same ID is already connected, close the old one gracefully
@@ -98,7 +127,7 @@ class AgentHub:
                     pass
             self._agents[agent_id] = agent
 
-        logger.info(f"Agent registered: {agent_id} (total connected: {len(self._agents)})")
+        logger.info(f"Agent registered: {agent_id} (os={agent.normalized_os}, total connected: {len(self._agents)})")
         return agent
 
     async def unregister_agent(self, agent_id: str):
@@ -117,16 +146,29 @@ class AgentHub:
         if agent:
             logger.info(f"Agent unregistered: {agent_id} (total connected: {len(self._agents)})")
 
-    def is_agent_online(self) -> bool:
-        """Returns True if at least one agent is connected and has recent heartbeat."""
+    def is_agent_online(self, client_os: Optional[str] = None) -> bool:
+        """
+        Returns True if at least one agent is connected and has recent heartbeat.
+        If client_os is provided and an agent for that OS is online, returns True.
+        """
         now = time.time()
+        norm_client_os = normalize_os(client_os) if client_os else None
+
+        if norm_client_os and norm_client_os != "unknown":
+            for agent in self._agents.values():
+                if (now - agent.last_heartbeat) < AGENT_HEARTBEAT_TIMEOUT and agent.normalized_os == norm_client_os:
+                    return True
+
         for agent in self._agents.values():
-            if now - agent.last_heartbeat < AGENT_HEARTBEAT_TIMEOUT:
+            if (now - agent.last_heartbeat) < AGENT_HEARTBEAT_TIMEOUT:
                 return True
         return False
 
-    def get_agent_info(self) -> Dict[str, Any]:
-        """Returns status information about connected agents for the frontend."""
+    def get_agent_info(self, client_os: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Returns status information about connected agents for the frontend.
+        Selects the best agent matching client_os if provided.
+        """
         now = time.time()
         online_agents = []
         for agent in self._agents.values():
@@ -137,13 +179,47 @@ class AgentHub:
                     "connected_at": agent.connected_at,
                     "last_heartbeat": agent.last_heartbeat,
                     "is_busy": agent.is_busy,
+                    "os": agent.normalized_os,
                     "health": agent.health_info,
                 })
+
+        available_platforms = list({a["os"] for a in online_agents if a["os"] != "unknown"})
+
+        selected_agent = None
+        matched_client_os = False
+        norm_client_os = normalize_os(client_os) if client_os else None
+
+        if norm_client_os and norm_client_os != "unknown":
+            # 1. Prefer matching OS non-busy agent
+            for a in online_agents:
+                if a["os"] == norm_client_os and not a["is_busy"]:
+                    selected_agent = a
+                    matched_client_os = True
+                    break
+            # 2. Prefer matching OS even if busy
+            if not selected_agent:
+                for a in online_agents:
+                    if a["os"] == norm_client_os:
+                        selected_agent = a
+                        matched_client_os = True
+                        break
+
+        # 3. Fallback: first non-busy, then first agent
+        if not selected_agent and online_agents:
+            for a in online_agents:
+                if not a["is_busy"]:
+                    selected_agent = a
+                    break
+            if not selected_agent:
+                selected_agent = online_agents[0]
 
         return {
             "online": len(online_agents) > 0,
             "agent_count": len(online_agents),
             "agents": online_agents,
+            "selected_agent": selected_agent,
+            "matched_client_os": matched_client_os,
+            "available_platforms": available_platforms,
         }
 
     async def handle_agent_message(self, agent_id: str, message: Dict[str, Any]):
@@ -162,6 +238,8 @@ class AgentHub:
                     self._agents[agent_id].health_info = {
                         k: v for k, v in message.items() if k != "type"
                     }
+                    if "os" in message and message["os"]:
+                        self._agents[agent_id].os = normalize_os(message["os"])
                     self._agents[agent_id].is_busy = message.get("is_busy", False)
 
         elif msg_type == "capture_started":
@@ -212,24 +290,39 @@ class AgentHub:
         target_host: Optional[str] = None,
         duration_seconds: Optional[float] = None,
         interface: Optional[str] = None,
+        client_os: Optional[str] = None,
     ) -> PendingCapture:
         """
         Dispatches a capture request to an available agent.
         Supports both local test captures (2525) and real external captures (e.g. Gmail 587/465).
+        Routes to the agent matching client_os if available.
         Returns a PendingCapture whose result_event will be set when complete.
         """
         # Find an available (not busy, not stale) agent
         now = time.time()
         target_agent: Optional[ConnectedAgent] = None
+        norm_client_os = normalize_os(client_os) if client_os else None
 
         async with self._lock:
-            for agent in self._agents.values():
-                is_stale = (now - agent.last_heartbeat) > AGENT_HEARTBEAT_TIMEOUT
-                if not is_stale and not agent.is_busy:
-                    target_agent = agent
-                    break
+            # 1. If client_os specified, find matching OS agent that is not busy and not stale
+            if norm_client_os and norm_client_os != "unknown":
+                for agent in self._agents.values():
+                    is_stale = (now - agent.last_heartbeat) > AGENT_HEARTBEAT_TIMEOUT
+                    if not is_stale and not agent.is_busy and agent.normalized_os == norm_client_os:
+                        target_agent = agent
+                        break
+
+            # 2. Fallback: find any available non-busy agent
+            if not target_agent:
+                for agent in self._agents.values():
+                    is_stale = (now - agent.last_heartbeat) > AGENT_HEARTBEAT_TIMEOUT
+                    if not is_stale and not agent.is_busy:
+                        target_agent = agent
+                        break
 
         if not target_agent:
+            if norm_client_os and norm_client_os != "unknown":
+                raise RuntimeError(f"No available Capture Agent is currently connected for {norm_client_os}.")
             raise RuntimeError("No available Capture Agent is currently connected.")
 
         request_id = str(uuid.uuid4())

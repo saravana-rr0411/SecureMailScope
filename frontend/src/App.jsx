@@ -335,14 +335,20 @@ export default function App() {
         updateStep('traffic'); // "Generating Authentic Traffic..."
       }
 
+      // Detect browser operating system to route capture to matching agent
+      const ua = (typeof navigator !== 'undefined' ? navigator.userAgent || '' : '').toLowerCase();
+      const plat = (typeof navigator !== 'undefined' ? navigator.platform || '' : '').toLowerCase();
+      const clientOS = (ua.includes('win') || plat.includes('win')) ? 'windows' : ((ua.includes('mac') || plat.includes('mac')) ? 'macos' : 'windows');
+
       // All capture requests go through the backend, which routes to the agent
       // via WebSocket Bridge (production) or direct HTTP (local dev fallback).
       // This avoids the HTTPS→HTTP localhost block in Safari/Chrome.
       const urls = [];
-      if (API_BASE) urls.push(`${API_BASE}/api/capture/generate-authentic`);
-      urls.push("/api/capture/generate-authentic");
+      const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
+      if (API_BASE) urls.push(`${API_BASE}/api/capture/generate-authentic${queryParam}`);
+      urls.push(`/api/capture/generate-authentic${queryParam}`);
       if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        urls.push("http://127.0.0.1:8000/api/capture/generate-authentic");
+        urls.push(`http://127.0.0.1:8000/api/capture/generate-authentic${queryParam}`);
       }
 
       let res = null;
@@ -359,8 +365,11 @@ export default function App() {
         try {
           res = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Client-OS': clientOS,
+            },
+            body: JSON.stringify({ ...payload, client_os: clientOS })
           });
           // An HTTP response was received (e.g. 200, 400, 404, 500).
           // Do NOT retry fallback URLs — the endpoint is reachable.

@@ -371,3 +371,203 @@ class TestGenerateAuthenticWithWSBridge:
         assert sent_payload["interface"] == "en0"
 
         run_async(hub.unregister_agent("agent-gmail-test"))
+
+
+class TestAgentSelectionAndRouting:
+    """
+    Validates agent OS tracking and selection logic:
+    - Mac + Mac
+    - Windows + Windows
+    - Mac + Windows simultaneously
+    - Windows + Mac simultaneously
+    - Multiple agents where matching OS must win
+    - No matching agent fallback
+    """
+
+    def test_mac_browser_mac_agent(self):
+        """Mac browser + Mac agent: matching agent selected."""
+        hub = AgentHub()
+        ws_mac = AsyncMock()
+        run_async(hub.register_agent(ws_mac, "agent-mac", client_os="darwin"))
+
+        info = hub.get_agent_info(client_os="macos")
+        assert info["online"] is True
+        assert info["matched_client_os"] is True
+        assert info["selected_agent"]["agent_id"] == "agent-mac"
+        assert info["selected_agent"]["os"] == "macos"
+
+        # Capture routes to Mac agent
+        pending = run_async(hub.request_capture(client_os="macos"))
+        assert pending.agent_id == "agent-mac"
+
+    def test_windows_browser_windows_agent(self):
+        """Windows browser + Windows agent: matching agent selected."""
+        hub = AgentHub()
+        ws_win = AsyncMock()
+        run_async(hub.register_agent(ws_win, "agent-win", client_os="windows"))
+
+        info = hub.get_agent_info(client_os="windows")
+        assert info["online"] is True
+        assert info["matched_client_os"] is True
+        assert info["selected_agent"]["agent_id"] == "agent-win"
+        assert info["selected_agent"]["os"] == "windows"
+
+        # Capture routes to Windows agent
+        pending = run_async(hub.request_capture(client_os="windows"))
+        assert pending.agent_id == "agent-win"
+
+    def test_mac_and_windows_simultaneously_mac_browser(self):
+        """Both Mac and Windows agents connected simultaneously. Mac browser selects Mac agent."""
+        hub = AgentHub()
+        ws_win = AsyncMock()
+        ws_mac = AsyncMock()
+        # Windows connected first, Mac connected second
+        run_async(hub.register_agent(ws_win, "agent-win", client_os="windows"))
+        run_async(hub.register_agent(ws_mac, "agent-mac", client_os="darwin"))
+
+        info = hub.get_agent_info(client_os="macos")
+        assert info["online"] is True
+        assert info["matched_client_os"] is True
+        assert info["selected_agent"]["agent_id"] == "agent-mac"
+        assert info["selected_agent"]["os"] == "macos"
+
+        # Capture routes to Mac agent
+        pending = run_async(hub.request_capture(client_os="macos"))
+        assert pending.agent_id == "agent-mac"
+        assert ws_mac.send_text.called
+        assert not ws_win.send_text.called
+
+    def test_windows_and_mac_simultaneously_windows_browser(self):
+        """Both agents connected, Mac connected FIRST. Windows browser MUST select Windows agent."""
+        hub = AgentHub()
+        ws_mac = AsyncMock()
+        ws_win = AsyncMock()
+        # Mac connected FIRST, Windows connected SECOND
+        run_async(hub.register_agent(ws_mac, "agent-mac", client_os="darwin"))
+        run_async(hub.register_agent(ws_win, "agent-win", client_os="windows"))
+
+        info = hub.get_agent_info(client_os="windows")
+        assert info["online"] is True
+        assert info["matched_client_os"] is True
+        assert info["selected_agent"]["agent_id"] == "agent-win"
+        assert info["selected_agent"]["os"] == "windows"
+
+        # Capture routes to Windows agent, NOT Mac agent
+        pending = run_async(hub.request_capture(client_os="windows"))
+        assert pending.agent_id == "agent-win"
+        assert ws_win.send_text.called
+        assert not ws_mac.send_text.called
+
+    def test_multiple_agents_where_matching_os_must_win(self):
+        """Multiple agents (Linux, Mac 1, Mac 2, Windows) connected. Matching OS must always win."""
+        hub = AgentHub()
+        ws_linux = AsyncMock()
+        ws_mac1 = AsyncMock()
+        ws_mac2 = AsyncMock()
+        ws_win = AsyncMock()
+
+        run_async(hub.register_agent(ws_linux, "agent-linux", client_os="linux"))
+        run_async(hub.register_agent(ws_mac1, "agent-mac-1", client_os="darwin"))
+        run_async(hub.register_agent(ws_mac2, "agent-mac-2", client_os="darwin"))
+        run_async(hub.register_agent(ws_win, "agent-win", client_os="windows"))
+
+        # For Windows client -> agent-win MUST win
+        win_info = hub.get_agent_info(client_os="windows")
+        assert win_info["selected_agent"]["agent_id"] == "agent-win"
+        assert win_info["matched_client_os"] is True
+
+        win_capture = run_async(hub.request_capture(client_os="windows"))
+        assert win_capture.agent_id == "agent-win"
+
+        # For Mac client -> a Mac agent MUST win
+        mac_info = hub.get_agent_info(client_os="macos")
+        assert mac_info["selected_agent"]["agent_id"] in ("agent-mac-1", "agent-mac-2")
+        assert mac_info["matched_client_os"] is True
+
+        mac_capture = run_async(hub.request_capture(client_os="macos"))
+        assert mac_capture.agent_id in ("agent-mac-1", "agent-mac-2")
+
+        # For Linux client -> agent-linux MUST win
+        linux_info = hub.get_agent_info(client_os="linux")
+        assert linux_info["selected_agent"]["agent_id"] == "agent-linux"
+        assert linux_info["matched_client_os"] is True
+
+    def test_no_matching_agent_fallback(self):
+        """When client is Windows but ONLY a Mac agent is connected, fallback is provided but matched_client_os is False."""
+        hub = AgentHub()
+        ws_mac = AsyncMock()
+        run_async(hub.register_agent(ws_mac, "agent-mac", client_os="darwin"))
+
+        info = hub.get_agent_info(client_os="windows")
+        assert info["online"] is True
+        # Fallback to connected agent
+        assert info["selected_agent"]["agent_id"] == "agent-mac"
+        assert info["selected_agent"]["os"] == "macos"
+        # Crucial: matched_client_os is False, enabling frontend to show "WINDOWS AGENT NEEDED"
+        assert info["matched_client_os"] is False
+
+    def test_rest_api_agent_status_routing(self):
+        """Tests REST /api/agent/status with query param, X-Client-OS header, and User-Agent."""
+        ws_mac = AsyncMock()
+        ws_win = AsyncMock()
+        agent_mac = run_async(agent_hub.register_agent(ws_mac, "api-agent-mac", client_os="darwin"))
+        agent_win = run_async(agent_hub.register_agent(ws_win, "api-agent-win", client_os="windows"))
+
+        try:
+            # 1. Query param ?client_os=windows
+            resp_win = client.get("/api/agent/status?client_os=windows")
+            assert resp_win.status_code == 200
+            data_win = resp_win.json()
+            assert data_win["status"] == "connected"
+            assert data_win["os"] == "windows"
+            assert data_win["matched_client_os"] is True
+
+            # 2. Query param ?client_os=macos
+            resp_mac = client.get("/api/agent/status?client_os=macos")
+            assert resp_mac.status_code == 200
+            data_mac = resp_mac.json()
+            assert data_mac["status"] == "connected"
+            assert data_mac["os"] == "macos"
+            assert data_mac["matched_client_os"] is True
+
+            # 3. Header X-Client-OS: windows
+            resp_hdr = client.get("/api/agent/status", headers={"X-Client-OS": "windows"})
+            assert resp_hdr.status_code == 200
+            data_hdr = resp_hdr.json()
+            assert data_hdr["os"] == "windows"
+
+            # 4. User-Agent with Windows NT
+            resp_ua_win = client.get("/api/agent/status", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            assert resp_ua_win.status_code == 200
+            assert resp_ua_win.json()["os"] == "windows"
+
+            # 5. User-Agent with Macintosh
+            resp_ua_mac = client.get("/api/agent/status", headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+            assert resp_ua_mac.status_code == 200
+            assert resp_ua_mac.json()["os"] == "macos"
+
+        finally:
+            run_async(agent_hub.unregister_agent("api-agent-mac"))
+            run_async(agent_hub.unregister_agent("api-agent-win"))
+
+    def test_capture_routing_via_api(self):
+        """Capture commands route to the matching OS agent, not merely status reporting."""
+        ws_mac = AsyncMock()
+        ws_win = AsyncMock()
+        run_async(agent_hub.register_agent(ws_mac, "cap-agent-mac", client_os="darwin"))
+        run_async(agent_hub.register_agent(ws_win, "cap-agent-win", client_os="windows"))
+
+        try:
+            # Dispatch capture for Windows client
+            pending_win = run_async(agent_hub.request_capture(client_os="windows"))
+            assert pending_win.agent_id == "cap-agent-win"
+            assert ws_win.send_text.called
+            assert not ws_mac.send_text.called
+
+            # Dispatch capture for Mac client
+            pending_mac = run_async(agent_hub.request_capture(client_os="macos"))
+            assert pending_mac.agent_id == "cap-agent-mac"
+            assert ws_mac.send_text.called
+        finally:
+            run_async(agent_hub.unregister_agent("cap-agent-mac"))
+            run_async(agent_hub.unregister_agent("cap-agent-win"))
