@@ -1,5 +1,5 @@
 import os
-from scapy.all import PcapReader, IP, TCP, UDP
+from scapy.all import PcapReader, IP, IPv6, TCP, UDP
 from app.capture.protocol_detector import detect_protocols_from_packets
 from app.reconstruction.tcp_reconstructor import reconstruct_tcp_sessions
 
@@ -40,6 +40,9 @@ def analyze_pcap(file_path: str) -> dict:
                 if IP in packet:
                     source_ips.add(packet[IP].src)
                     destination_ips.add(packet[IP].dst)
+                elif IPv6 in packet:
+                    source_ips.add(packet[IPv6].src)
+                    destination_ips.add(packet[IPv6].dst)
                 
                 if TCP in packet:
                     tcp_packets += 1

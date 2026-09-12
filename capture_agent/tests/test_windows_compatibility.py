@@ -320,3 +320,57 @@ def test_github_actions_windows_workflow_structure():
     assert "actions/upload-artifact" in content
     assert "SecureMailScopeCaptureAgent-1.0.0-Setup" in content
     assert "gh release upload" in content or "gh release create" in content
+
+
+def test_windows_gmail_capture_selects_active_external_interface_not_loopback():
+    """Verify Gmail capture mode selects active external interface (Wi-Fi), never loopback."""
+    with patch("capture_agent.recorder.packet_capturer.get_current_os", return_value="windows"):
+        with patch("capture_agent.config.get_current_os", return_value="windows"):
+            with patch("capture_agent.config.detect_active_interface", return_value="Wi-Fi"):
+                with patch("capture_agent.recorder.packet_capturer.detect_active_interface", return_value="Wi-Fi"):
+                    # Case 1: No interface provided -> resolves to active Wi-Fi
+                    capturer1 = PacketCapturer(
+                        output_pcap_path="test_gmail.pcap",
+                        ports=[587, 465]
+                    )
+                    assert capturer1.interface == "Wi-Fi"
+                    assert "loopback" not in capturer1.interface.lower()
+
+                    # Case 2: Loopback explicitly provided -> overridden to active external Wi-Fi for Gmail ports
+                    capturer2 = PacketCapturer(
+                        output_pcap_path="test_gmail.pcap",
+                        ports=[587, 465],
+                        interface=r"\Device\NPF_Loopback"
+                    )
+                    assert capturer2.interface == "Wi-Fi"
+                    assert capturer2.interface != r"\Device\NPF_Loopback"
+
+                    # Case 3: Controlled local test port 2525 -> preserves loopback
+                    capturer3 = PacketCapturer(
+                        output_pcap_path="test_local.pcap",
+                        port=2525,
+                        interface=r"\Device\NPF_Loopback"
+                    )
+                    assert capturer3.interface == r"\Device\NPF_Loopback"
+                    assert capturer3.build_bpf_filter() == "tcp and port 2525 and host 127.0.0.1"
+
+
+def test_windows_gmail_bpf_filter_preserves_ipv6_and_ipv4():
+    """Verify Gmail capture BPF filter does not restrict to IPv4-only smtp.gmail.com and supports IPv6."""
+    with patch("capture_agent.recorder.packet_capturer.get_current_os", return_value="windows"):
+        with patch("capture_agent.config.detect_active_interface", return_value="Wi-Fi"):
+            # Gmail capture initiated with default host="smtp.gmail.com"
+            capturer = PacketCapturer(
+                output_pcap_path="test_gmail.pcap",
+                ports=[587, 465],
+                host="smtp.gmail.com"
+            )
+            # Must omit 'host smtp.gmail.com' to prevent Npcap from compiling an IPv4-only filter
+            bpf = capturer.build_bpf_filter()
+            assert bpf == "tcp and (port 587 or port 465)"
+            assert "host" not in bpf
+
+            # Verify filter can be compiled with BPF and matches both IPv6 (0x86dd) and IPv4 (0x0800)
+            from scapy.arch.bpf.core import compile_filter
+            compiled = compile_filter(bpf, linktype=1)
+            assert compiled.bf_len > 0

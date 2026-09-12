@@ -472,7 +472,7 @@ async def generate_authentic_capture_endpoint(
         protocol = "SMTP"
         port = port or 587
         ports = ports or [587, 465]
-        target_host = target_host or "smtp.gmail.com"
+        target_host = target_host if (target_host and target_host != "smtp.gmail.com") else None
         duration_seconds = float(duration_seconds or 40.0)
 
     tmp_path = None

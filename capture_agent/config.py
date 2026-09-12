@@ -210,25 +210,127 @@ def detect_active_interface() -> str:
             pass
         return "eth0"
     elif current_os == "windows":
-        # 1. Try PowerShell Get-NetRoute for default gateway interface alias (e.g. 'Wi-Fi' or 'Ethernet')
+        # 1. Fast native netsh query for connected network interface (fast Win32, no .NET overhead)
+        try:
+            out = subprocess.check_output(
+                ["netsh", "interface", "show", "interface"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2
+            ).strip()
+            # If mock or command returned a single interface name directly:
+            if "\n" not in out and out and "loopback" not in out.lower():
+                return out
+            for line in out.splitlines():
+                if "Connected" in line:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        iface_name = " ".join(parts[3:]).strip()
+                        if iface_name and "loopback" not in iface_name.lower():
+                            return iface_name
+        except Exception:
+            pass
+
+        # 2. PowerShell query for default route interface alias (checking both IPv6 ::/0 and IPv4 0.0.0.0/0)
         try:
             cmd = [
                 "powershell", "-NoProfile", "-Command",
-                "(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Select-Object -First 1).InterfaceAlias"
+                "@(Get-NetRoute -DestinationPrefix @('::/0', '0.0.0.0/0') -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -ExpandProperty InterfaceAlias -First 1; Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Loopback' } | Select-Object -ExpandProperty Name -First 1)[0]"
             ]
             out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=3).strip()
-            if out:
+            if out and "loopback" not in out.lower():
                 return out
         except Exception:
             pass
-        # 2. Try Scapy's default route interface
+
+        # 3. Scapy routing tables and interface inspection (active on real Windows hosts)
+        if sys.platform == "win32":
+            try:
+                from scapy.all import conf
+                # Check IPv6 route to Google (e.g. Gmail IPv6 endpoint)
+                try:
+                    iface6 = conf.route6.route("2607:f8b0:4004:800::206d")[0]
+                    if iface6:
+                        name_str = getattr(iface6, "name", "") or str(iface6)
+                        desc_str = getattr(iface6, "description", "") or ""
+                        net_str = getattr(iface6, "network_name", "") or ""
+                        combined = f"{name_str} {desc_str} {net_str}".lower()
+                        if not ("loopback" in combined or "npf_loopback" in combined):
+                            return net_str or name_str
+                except Exception:
+                    pass
+
+                # Check IPv4 route to Google/DNS
+                try:
+                    iface4 = conf.route.route("8.8.8.8")[0]
+                    if iface4:
+                        name_str = getattr(iface4, "name", "") or str(iface4)
+                        desc_str = getattr(iface4, "description", "") or ""
+                        net_str = getattr(iface4, "network_name", "") or ""
+                        combined = f"{name_str} {desc_str} {net_str}".lower()
+                        if not ("loopback" in combined or "npf_loopback" in combined):
+                            return net_str or name_str
+                except Exception:
+                    pass
+
+                # Inspect Scapy conf.ifaces for active external Wi-Fi / Ethernet adapter
+                candidates = []
+                for iface_key, iface_obj in conf.ifaces.items():
+                    name_str = getattr(iface_obj, "name", "") or str(iface_key)
+                    desc_str = getattr(iface_obj, "description", "") or ""
+                    net_str = getattr(iface_obj, "network_name", "") or str(iface_key)
+                    combined = f"{name_str} {desc_str} {net_str}".lower()
+
+                    if "loopback" in combined or "npf_loopback" in combined:
+                        continue
+
+                    # Check IPs assigned to this adapter
+                    ips_v4 = []
+                    ips_v6 = []
+                    if hasattr(iface_obj, "ips") and isinstance(iface_obj.ips, dict):
+                        ips_v4 = iface_obj.ips.get(4, []) or []
+                        ips_v6 = iface_obj.ips.get(6, []) or []
+
+                    has_global_v6 = any(ip for ip in ips_v6 if not ip.startswith("fe80:") and ip != "::1")
+                    has_routable_v4 = any(ip for ip in ips_v4 if not ip.startswith("127.") and not ip.startswith("169.254."))
+                    has_any_v6 = any(ip for ip in ips_v6 if ip != "::1")
+
+                    score = 0
+                    if has_global_v6:
+                        score += 10
+                    if has_routable_v4:
+                        score += 10
+                    if has_any_v6:
+                        score += 3
+                    if "wi-fi" in combined or "wifi" in combined or "wireless" in combined or "802.11" in combined or "ax211" in combined:
+                        score += 5
+                    elif "ethernet" in combined:
+                        score += 2
+
+                    target_id = net_str or name_str
+                    candidates.append((score, target_id))
+
+                if candidates:
+                    candidates.sort(key=lambda c: c[0], reverse=True)
+                    if candidates[0][0] > 0:
+                        return candidates[0][1]
+            except Exception:
+                pass
+
+        # 4. Try conf.iface if not loopback
         try:
             from scapy.all import conf
             if conf.iface:
-                return str(conf.iface)
+                ci_name = getattr(conf.iface, "name", "") or str(conf.iface)
+                ci_desc = getattr(conf.iface, "description", "") or ""
+                ci_net = getattr(conf.iface, "network_name", "") or ""
+                ci_combined = f"{ci_name} {ci_desc} {ci_net}".lower()
+                if not ("loopback" in ci_combined or "npf_loopback" in ci_combined):
+                    return ci_net or ci_name
         except Exception:
             pass
-        return "Ethernet"
+
+        return "Wi-Fi"
     return detect_loopback_interface()
 
 

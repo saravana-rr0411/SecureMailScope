@@ -252,7 +252,7 @@ class WebSocketBridge:
                             output_pcap_path=output_pcap_path,
                             ports=gmail_ports,
                             interface=interface or get_capture_interface(gmail_ports),
-                            host=target_host
+                            host=target_host if target_host != "smtp.gmail.com" else None
                         )
                         duration = duration_seconds or 40.0
                         logger.info(f"WS Bridge: Capturing live Gmail SMTP submission traffic on {capturer.bpf_filter} ({capturer.interface}) for {duration}s...")

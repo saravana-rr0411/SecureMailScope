@@ -113,7 +113,22 @@ class PacketCapturer:
 
         self.host = host
         self.custom_bpf_filter = bpf_filter
+
+        # For mail submission ports (587, 465), do NOT filter by domain name 'smtp.gmail.com' in BPF.
+        # Npcap/libpcap compiles domain names by resolving them at compile-time to IPv4 only,
+        # which inserts a BPF instruction that drops all IPv6 traffic (EtherType 0x86dd).
+        if (587 in self.ports or 465 in self.ports) and 2525 not in self.ports:
+            if self.host and self.host.lower() == "smtp.gmail.com":
+                self.host = None
+
         self.interface = interface or get_capture_interface(self.ports)
+        # Ensure mail submission mode on ports 587/465 never captures on loopback interface
+        if (587 in self.ports or 465 in self.ports) and 2525 not in self.ports:
+            if not self.interface or "loopback" in self.interface.lower() or self.interface in ("lo0", "lo", r"\Device\NPF_Loopback"):
+                self.interface = detect_active_interface()
+                if not self.interface or "loopback" in self.interface.lower():
+                    self.interface = "Wi-Fi" if get_current_os() == "windows" else "en0"
+
         self._process: Optional[subprocess.Popen] = None
         self._is_capturing = False
         self._windows_sniffer = None

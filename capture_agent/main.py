@@ -356,7 +356,7 @@ async def generate_authentic_capture(
                     output_pcap_path=output_pcap_path,
                     ports=gmail_ports,
                     interface=request.interface or get_capture_interface(gmail_ports),
-                    host=request.target_host
+                    host=request.target_host if request.target_host != "smtp.gmail.com" else None
                 )
                 duration = request.duration_seconds or request.timeout_seconds or 40.0
                 logger.info(f"Capturing live Gmail SMTP submission traffic on {capturer.bpf_filter} ({capturer.interface}) for {duration}s...")

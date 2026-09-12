@@ -1,6 +1,6 @@
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from scapy.all import IP, TCP, Raw
+from scapy.all import IP, IPv6, TCP, Raw
 
 # Well-known email ports
 SMTP_PORTS = {25, 587, 465, 2525}
@@ -240,9 +240,9 @@ def detect_protocols_from_packets(packets: List[Any]) -> List[Dict[str, Any]]:
     flow_endpoints: Dict[Tuple[str, str, int, int], Tuple[str, int, str, int]] = {}
 
     for packet in packets:
-        if IP in packet and TCP in packet:
-            src_ip = packet[IP].src
-            dst_ip = packet[IP].dst
+        if (IP in packet or IPv6 in packet) and TCP in packet:
+            src_ip = packet[IP].src if IP in packet else packet[IPv6].src
+            dst_ip = packet[IP].dst if IP in packet else packet[IPv6].dst
             sport = packet[TCP].sport
             dport = packet[TCP].dport
 

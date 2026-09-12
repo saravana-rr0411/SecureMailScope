@@ -131,3 +131,45 @@ def test_payload_extraction_and_retransmissions():
     assert s["server_to_client_bytes"] == len(b"220 Ready\r\n")
     assert "STARTTLS" in s["client_payload"]
     assert "220 Ready" in s["server_payload"]
+
+
+def test_ipv6_smtp_session_reconstruction():
+    """Verify bidirectional IPv6 SMTP session reconstruction with STARTTLS."""
+    from scapy.all import IPv6
+    t0 = 6000.0
+    client_ipv6 = "2001:db8:85a3::8a2e:370:7334"
+    server_ipv6 = "2607:f8b0:4004:800::206d"
+
+    def create_tcp6_packet(src_ip, dst_ip, sport, dport, flags, payload=b"", pkt_time=None):
+        ether = Ether(src="aa:bb:cc:dd:ee:01", dst="aa:bb:cc:dd:ee:02")
+        ip6 = IPv6(src=src_ip, dst=dst_ip)
+        tcp = TCP(sport=sport, dport=dport, flags=flags)
+        pkt = (ether / ip6 / tcp / Raw(load=payload)) if payload else (ether / ip6 / tcp)
+        pkt.time = pkt_time if pkt_time is not None else time.time()
+        return pkt
+
+    pkts = [
+        # SYN from client to Gmail SMTP port 587
+        create_tcp6_packet(client_ipv6, server_ipv6, 54321, 587, "S", pkt_time=t0),
+        # SYN-ACK from Gmail SMTP
+        create_tcp6_packet(server_ipv6, client_ipv6, 587, 54321, "SA", pkt_time=t0 + 0.01),
+        # ACK from client
+        create_tcp6_packet(client_ipv6, server_ipv6, 54321, 587, "A", pkt_time=t0 + 0.02),
+        # Server banner: 220 smtp.gmail.com ESMTP
+        create_tcp6_packet(server_ipv6, client_ipv6, 587, 54321, "PA", payload=b"220 smtp.gmail.com ESMTP ready\r\n", pkt_time=t0 + 0.03),
+        # Client EHLO
+        create_tcp6_packet(client_ipv6, server_ipv6, 54321, 587, "PA", payload=b"EHLO [2001:db8:85a3::8a2e:370:7334]\r\n", pkt_time=t0 + 0.04),
+    ]
+
+    sessions = reconstruct_tcp_sessions(pkts)
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s["protocol"] == "SMTP"
+    assert s["submission_type"] == "SMTP STARTTLS"
+    assert s["source_ip"] == client_ipv6
+    assert s["destination_ip"] == server_ipv6
+    assert s["source_port"] == 54321
+    assert s["destination_port"] == 587
+    assert s["packet_count"] == 5
+    assert "smtp.gmail.com" in s["server_payload"]
+    assert "EHLO" in s["client_payload"]

@@ -74,7 +74,12 @@ class WindowsPacketSniffer:
             }
 
             if self.interface:
-                sniff_kwargs["iface"] = self.interface
+                try:
+                    from scapy.interfaces import resolve_iface
+                    resolved_iface = resolve_iface(self.interface)
+                    sniff_kwargs["iface"] = resolved_iface
+                except Exception:
+                    sniff_kwargs["iface"] = self.interface
 
             logger.info(
                 f"Windows sniffer active on iface '{self.interface}', "

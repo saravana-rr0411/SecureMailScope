@@ -1,5 +1,5 @@
-from typing import List, Dict, Any, Tuple
-from scapy.all import IP, TCP, Raw
+from typing import List, Dict, Any, Tuple, Optional
+from scapy.all import IP, IPv6, TCP, Raw
 from app.capture.protocol_detector import detect_flow_protocol, SMTP_PORTS, IMAP_PORTS, POP3_PORTS
 from app.tls.starttls_detector import assess_starttls
 from app.tls.tls_parser import analyze_tls_session
@@ -12,20 +12,31 @@ from app.ml.crypto_risk_scorer import crypto_risk_scorer_instance
 KNOWN_EMAIL_PORTS = SMTP_PORTS | IMAP_PORTS | POP3_PORTS
 
 
+def get_packet_src_dst(pkt) -> Tuple[Optional[str], Optional[str]]:
+    """Extracts source and destination IP from either IPv4 or IPv6 header."""
+    if IP in pkt:
+        return pkt[IP].src, pkt[IP].dst
+    elif IPv6 in pkt:
+        return pkt[IPv6].src, pkt[IPv6].dst
+    return None, None
+
+
 def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
     """
     Reconstructs bidirectional TCP sessions from a list of captured packets.
     Groups packets by (IP, Port) pairs regardless of direction, establishes
     client/server roles, preserves chronological order, and extracts metrics, payloads, STARTTLS state,
     cryptographic TLS parameters, deterministic assessment, posture scoring, ML features, and AI anomaly analysis.
+    Supports both IPv4 and IPv6 TCP sessions.
     """
     raw_sessions: Dict[Tuple[str, str, int, int], List[Any]] = {}
 
     # 1. Group packets into bidirectional conversations
     for packet in packets:
-        if IP in packet and TCP in packet:
-            src_ip = packet[IP].src
-            dst_ip = packet[IP].dst
+        if (IP in packet or IPv6 in packet) and TCP in packet:
+            src_ip, dst_ip = get_packet_src_dst(packet)
+            if not src_ip or not dst_ip:
+                continue
             sport = int(packet[TCP].sport)
             dport = int(packet[TCP].dport)
 
@@ -68,9 +79,8 @@ def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
             flags = p[TCP].flags
             # If SYN is set and ACK is not set (TCP SYN initiation)
             if flags & 0x02 and not (flags & 0x10):
-                client_ip = p[IP].src
+                client_ip, server_ip = get_packet_src_dst(p)
                 client_port = int(p[TCP].sport)
-                server_ip = p[IP].dst
                 server_port = int(p[TCP].dport)
                 break
 
@@ -79,24 +89,22 @@ def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
             for p in pkts:
                 src_p = int(p[TCP].sport)
                 dst_p = int(p[TCP].dport)
+                p_src, p_dst = get_packet_src_dst(p)
                 if dst_p in KNOWN_EMAIL_PORTS and src_p not in KNOWN_EMAIL_PORTS:
-                    client_ip = p[IP].src
+                    client_ip, server_ip = p_src, p_dst
                     client_port = src_p
-                    server_ip = p[IP].dst
                     server_port = dst_p
                     break
                 elif src_p in KNOWN_EMAIL_PORTS and dst_p not in KNOWN_EMAIL_PORTS:
-                    client_ip = p[IP].dst
+                    client_ip, server_ip = p_dst, p_src
                     client_port = dst_p
-                    server_ip = p[IP].src
                     server_port = src_p
                     break
 
         # Heuristic 3: Default to first packet's source as client
         if client_ip is None:
-            client_ip = first_pkt[IP].src
+            client_ip, server_ip = get_packet_src_dst(first_pkt)
             client_port = int(first_pkt[TCP].sport)
-            server_ip = first_pkt[IP].dst
             server_port = int(first_pkt[TCP].dport)
 
         # 4. Extract directional metrics and payload streams
@@ -110,7 +118,8 @@ def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
         ordered_messages: List[Tuple[str, bytes]] = []
 
         for p in pkts:
-            is_c2s = (p[IP].src == client_ip and int(p[TCP].sport) == client_port)
+            p_src, _ = get_packet_src_dst(p)
+            is_c2s = (p_src == client_ip and int(p[TCP].sport) == client_port)
             payload = bytes(p[Raw].load) if Raw in p else b""
             direction = "c2s" if is_c2s else "s2c"
 
