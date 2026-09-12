@@ -105,7 +105,10 @@ async def enforce_localhost_and_origin(request: Request, call_next):
             content={"detail": f"Forbidden: Cross-origin access from '{origin}' is not permitted."}
         )
 
-    return await call_next(request)
+    response = await call_next(request)
+    if origin and is_origin_allowed(origin):
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 
 # Global mutex ensuring only one capture runs at a time
