@@ -398,3 +398,296 @@ def delete_analysis_result(capture_id: str) -> bool:
     client = get_supabase_client()
     response = client.table(TABLE_NAME).delete().eq("capture_id", capture_id).execute()
     return bool(response.data and len(response.data) > 0)
+
+
+def get_available_periods() -> Dict[str, List[Dict[str, str]]]:
+    """
+    Retrieves available filter periods (distinct dates and months) dynamically
+    from actual 'analysis_results.analyzed_at' values in Supabase.
+    Dates are formatted as ISO 'YYYY-MM-DD' and human-readable '11 Sep 2026'.
+    Months are formatted as ISO 'YYYY-MM' and human-readable 'September 2026'.
+    Both lists are sorted newest-first (descending).
+    """
+    if not is_supabase_configured():
+        return {"dates": [], "months": []}
+
+    client = get_supabase_client()
+    rows = []
+    try:
+        response = client.table(TABLE_NAME).select("analyzed_at").order("analyzed_at", desc=True).execute()
+        rows = response.data or []
+    except Exception as e:
+        logger.warning(f"Failed to query analyzed_at with order: {e}. Trying full select.")
+        try:
+            response = client.table(TABLE_NAME).select("analyzed_at").execute()
+            rows = response.data or []
+        except Exception as e2:
+            logger.error(f"Failed to select analyzed_at: {e2}")
+            rows = []
+
+    if not rows:
+        return {"dates": [], "months": []}
+
+    dates_map: Dict[str, str] = {}
+    months_map: Dict[str, str] = {}
+
+    for row in rows:
+        raw_ts = row.get("analyzed_at")
+        if not raw_ts:
+            continue
+        ts_str = str(raw_ts).strip().strip('"').strip("'")
+        if not ts_str:
+            continue
+        try:
+            # Handle ISO string with or without Z, or space-separated
+            clean_ts = ts_str.replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(clean_ts)
+            date_key = dt.strftime("%Y-%m-%d")
+            date_label = dt.strftime("%d %b %Y")
+            if date_key not in dates_map:
+                dates_map[date_key] = date_label
+
+            month_key = dt.strftime("%Y-%m")
+            month_label = dt.strftime("%B %Y")
+            if month_key not in months_map:
+                months_map[month_key] = month_label
+        except Exception as parse_err:
+            # Fallback simple string slice for YYYY-MM-DD
+            if len(ts_str) >= 10 and ts_str[4] == "-" and ts_str[7] == "-":
+                date_key = ts_str[:10]
+                month_key = ts_str[:7]
+                try:
+                    parts = date_key.split("-")
+                    fallback_d = datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+                    dates_map[date_key] = fallback_d.strftime("%d %b %Y")
+                    months_map[month_key] = fallback_d.strftime("%B %Y")
+                except Exception:
+                    logger.debug(f"Fallback parse failed for {ts_str}: {parse_err}")
+
+    sorted_dates = [
+        {"value": k, "label": dates_map[k]}
+        for k in sorted(dates_map.keys(), reverse=True)
+    ]
+    sorted_months = [
+        {"value": k, "label": months_map[k]}
+        for k in sorted(months_map.keys(), reverse=True)
+    ]
+
+    return {
+        "dates": sorted_dates,
+        "months": sorted_months
+    }
+
+
+def _score_to_risk_tier(score: Optional[float]) -> str:
+    if score is None:
+        return "Unscored"
+    if score <= 20.0:
+        return "LOW"
+    if score <= 50.0:
+        return "MODERATE"
+    if score <= 80.0:
+        return "HIGH"
+    return "CRITICAL"
+
+
+def _get_risk_styling(tier: str) -> tuple[str, str]:
+    if tier == "LOW":
+        return "#10b981", "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+    elif tier == "MODERATE":
+        return "#f59e0b", "text-amber-400 border-amber-500/30 bg-amber-500/10"
+    elif tier == "HIGH":
+        return "#f43f5e", "text-rose-400 border-rose-500/30 bg-rose-500/10"
+    elif tier == "CRITICAL":
+        return "#991b1b", "text-rose-300 border-rose-600/40 bg-rose-950/40"
+    return "#94a3b8", "text-slate-400 border-slate-700 bg-slate-800"
+
+
+def get_dashboard_trends(
+    period: str,
+    date_str: Optional[str] = None,
+    month_str: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Retrieves trend and security status aggregation points for the Executive Dashboard graphs
+    filtered strictly by Daily or Monthly period from Supabase 'analysis_results'.
+    Performs careful date/time boundary queries against timestamptz analyzed_at.
+    """
+    if not is_supabase_configured():
+        return {
+            "period": period,
+            "date": date_str,
+            "month": month_str,
+            "points": [],
+            "summary": {
+                "total": 0, "secure": 0, "insecure": 0,
+                "securePct": 0, "insecurePct": 0, "avgRisk": None, "totalSessions": 0
+            }
+        }
+
+    client = get_supabase_client()
+
+    # Determine period boundaries
+    if period == "daily":
+        if not date_str:
+            periods = get_available_periods()
+            if periods["dates"]:
+                date_str = periods["dates"][0]["value"]
+            else:
+                date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+        try:
+            parsed_date = datetime.date.fromisoformat(date_str)
+        except ValueError:
+            raise ValueError(f"Invalid date format '{date_str}'. Expected 'YYYY-MM-DD'.")
+
+        start_dt = datetime.datetime(parsed_date.year, parsed_date.month, parsed_date.day, 0, 0, 0, tzinfo=datetime.timezone.utc)
+        end_dt = start_dt + datetime.timedelta(days=1)
+
+    elif period == "monthly":
+        if not month_str:
+            periods = get_available_periods()
+            if periods["months"]:
+                month_str = periods["months"][0]["value"]
+            else:
+                month_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
+
+        try:
+            parts = month_str.split("-")
+            year = int(parts[0])
+            month = int(parts[1])
+            start_dt = datetime.datetime(year, month, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+            if month == 12:
+                end_dt = datetime.datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+            else:
+                end_dt = datetime.datetime(year, month + 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid month format '{month_str}'. Expected 'YYYY-MM'.")
+    else:
+        raise ValueError(f"Invalid period '{period}'. Must be 'daily' or 'monthly'.")
+
+    # Query only the required columns within the exact datetime boundary
+    response = (
+        client.table(TABLE_NAME)
+        .select("id, capture_id, filename, analyzed_at, ai_risk_score, ai_risk_tier, security_posture, posture_status")
+        .gte("analyzed_at", start_dt.isoformat())
+        .lt("analyzed_at", end_dt.isoformat())
+        .order("analyzed_at", desc=False)
+        .execute()
+    )
+
+    rows = response.data or []
+
+    # Overall period summary calculations
+    total_reports = len(rows)
+    total_secure = 0
+    all_scores: List[float] = []
+
+    for r in rows:
+        is_sec = (r.get("posture_status") == "SECURE" or r.get("security_posture") == "SECURE")
+        if is_sec:
+            total_secure += 1
+        if r.get("ai_risk_score") is not None:
+            try:
+                all_scores.append(float(r["ai_risk_score"]))
+            except (ValueError, TypeError):
+                pass
+
+    total_insecure = total_reports - total_secure
+    secure_pct = round((total_secure / total_reports) * 100) if total_reports > 0 else 0
+    insecure_pct = round((total_insecure / total_reports) * 100) if total_reports > 0 else 0
+    avg_risk = round(sum(all_scores) / len(all_scores), 1) if all_scores else None
+
+    summary = {
+        "total": total_reports,
+        "secure": total_secure,
+        "insecure": total_insecure,
+        "securePct": secure_pct,
+        "insecurePct": insecure_pct,
+        "avgRisk": avg_risk,
+        "totalSessions": total_reports
+    }
+
+    # Group rows into chart points
+    buckets: Dict[str, Dict[str, Any]] = {}
+
+    for r in rows:
+        ts_str = r.get("analyzed_at")
+        if not ts_str:
+            continue
+        try:
+            dt = datetime.datetime.fromisoformat(ts_str)
+        except Exception:
+            continue
+
+        if period == "monthly":
+            # Group by day within month
+            bucket_key = dt.strftime("%Y-%m-%d")
+            bucket_label = dt.strftime("%d %b")
+        else:
+            # Daily: group by minute/time within day
+            bucket_key = dt.strftime("%Y-%m-%dT%H:%M")
+            bucket_label = dt.strftime("%H:%M")
+
+        if bucket_key not in buckets:
+            buckets[bucket_key] = {
+                "key": f"point-{bucket_key}",
+                "dayKey": dt.strftime("%Y-%m-%d"),
+                "label": bucket_label,
+                "rows": []
+            }
+
+        buckets[bucket_key]["rows"].append(r)
+
+    points: List[Dict[str, Any]] = []
+
+    for b_key in sorted(buckets.keys()):
+        b_data = buckets[b_key]
+        b_rows = b_data["rows"]
+        b_total = len(b_rows)
+        b_secure = sum(1 for x in b_rows if (x.get("posture_status") == "SECURE" or x.get("security_posture") == "SECURE"))
+        b_insecure = b_total - b_secure
+
+        b_scores: List[float] = []
+        for x in b_rows:
+            if x.get("ai_risk_score") is not None:
+                try:
+                    b_scores.append(float(x["ai_risk_score"]))
+                except (ValueError, TypeError):
+                    pass
+
+        has_valid_risk = len(b_scores) > 0
+        b_avg_risk = round(sum(b_scores) / len(b_scores)) if has_valid_risk else None
+        risk_tier = _score_to_risk_tier(b_avg_risk) if b_avg_risk is not None else None
+        risk_level = risk_tier if risk_tier is not None else "Unscored"
+        risk_dot_color, risk_badge_class = _get_risk_styling(risk_level)
+
+        filenames = [x.get("filename") or "capture.pcap" for x in b_rows]
+        pcaps_list = ", ".join(filenames)
+
+        points.append({
+            "key": b_data["key"],
+            "dayKey": b_data["dayKey"],
+            "label": b_data["label"],
+            "secureReports": b_secure,
+            "insecureReports": b_insecure,
+            "totalReports": b_total,
+            "reports": b_total,
+            "avgRisk": b_avg_risk,
+            "hasValidRisk": has_valid_risk,
+            "riskLevel": risk_level,
+            "riskTier": risk_tier,
+            "riskDotColor": risk_dot_color,
+            "riskBadgeClass": risk_badge_class,
+            "totalSessions": b_total,
+            "pcapsList": pcaps_list
+        })
+
+    return {
+        "period": period,
+        "date": date_str if period == "daily" else None,
+        "month": month_str if period == "monthly" else None,
+        "points": points,
+        "summary": summary
+    }
+

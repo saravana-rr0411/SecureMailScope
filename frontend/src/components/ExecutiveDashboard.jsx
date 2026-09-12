@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from '../reportGenerator';
 import { getPcapSecurityPosture, deriveSecurityStats, deriveDailyTrends } from '../utils/securityStats';
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export default function ExecutiveDashboard({
   capture,
@@ -11,12 +13,176 @@ export default function ExecutiveDashboard({
   onTriggerUpload,
   theme = 'light'
 }) {
+  const displayPcaps = Array.isArray(analyzedPcaps) ? analyzedPcaps : [];
+
   const [hoveredStatusIdx, setHoveredStatusIdx] = useState(null);
   const [hoveredRiskIdx, setHoveredRiskIdx] = useState(null);
   const [openReportMenuPcap, setOpenReportMenuPcap] = useState(null);
   const [generatingPcapFilename, setGeneratingPcapFilename] = useState(null);
   const [exportFeedback, setExportFeedback] = useState(null);
   const reportMenuRef = useRef(null);
+
+  // Synchronously derive dates and months from displayPcaps (database records passed from App.jsx)
+  const derivedPeriods = useMemo(() => {
+    const datesMap = new Map();
+    const monthsMap = new Map();
+    displayPcaps.forEach((p) => {
+      const ts = p.analyzed_at || p.analyzedAt || p.timestamp;
+      if (!ts) return;
+      try {
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return;
+        const year = d.getUTCFullYear();
+        const monthNum = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const dayNum = String(d.getUTCDate()).padStart(2, '0');
+        const dateKey = `${year}-${monthNum}-${dayNum}`;
+        const monthKey = `${year}-${monthNum}`;
+
+        if (!datesMap.has(dateKey)) {
+          const monthName = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+          datesMap.set(dateKey, {
+            value: dateKey,
+            label: `${dayNum} ${monthName} ${year}`
+          });
+        }
+
+        if (!monthsMap.has(monthKey)) {
+          const fullMonth = d.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+          monthsMap.set(monthKey, {
+            value: monthKey,
+            label: `${fullMonth} ${year}`
+          });
+        }
+      } catch {}
+    });
+
+    const dates = Array.from(datesMap.values()).sort((a, b) => b.value.localeCompare(a.value));
+    const months = Array.from(monthsMap.values()).sort((a, b) => b.value.localeCompare(a.value));
+    return { dates, months };
+  }, [displayPcaps]);
+
+  // Daily / Monthly Trend Filtering State
+  const [periodType, setPeriodType] = useState('daily'); // 'daily' | 'monthly'
+  const [selectedDate, setSelectedDate] = useState(() => derivedPeriods.dates[0]?.value || '');
+  const [selectedMonth, setSelectedMonth] = useState(() => derivedPeriods.months[0]?.value || '');
+  const [backendPeriods, setBackendPeriods] = useState({ dates: [], months: [] });
+  const [trendPointsData, setTrendPointsData] = useState(null);
+  const [isTrendsLoading, setIsTrendsLoading] = useState(false);
+  const [trendsError, setTrendsError] = useState(null);
+
+  // Authoritative options: backend if loaded, otherwise derived from database pcaps
+  const effectiveDates = backendPeriods.dates && backendPeriods.dates.length > 0
+    ? backendPeriods.dates
+    : derivedPeriods.dates;
+
+  const effectiveMonths = backendPeriods.months && backendPeriods.months.length > 0
+    ? backendPeriods.months
+    : derivedPeriods.months;
+
+  // Keep selectedDate and selectedMonth synchronized to the newest available period if empty or stale
+  useEffect(() => {
+    if (effectiveDates.length > 0 && (!selectedDate || !effectiveDates.some((d) => d.value === selectedDate))) {
+      setSelectedDate(effectiveDates[0].value);
+    }
+  }, [effectiveDates, selectedDate]);
+
+  useEffect(() => {
+    if (effectiveMonths.length > 0 && (!selectedMonth || !effectiveMonths.some((m) => m.value === selectedMonth))) {
+      setSelectedMonth(effectiveMonths[0].value);
+    }
+  }, [effectiveMonths, selectedMonth]);
+
+  // Multi-fallback fetch supporting API_BASE, relative path, and local port 8000
+  const fetchDashboardApi = async (endpoint) => {
+    const urls = [];
+    if (API_BASE) urls.push(`${API_BASE}${endpoint}`);
+    urls.push(endpoint);
+    if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+      urls.push(`http://127.0.0.1:8000${endpoint}`);
+    }
+
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) return res;
+      } catch (err) {
+        // try next candidate
+      }
+    }
+    return null;
+  };
+
+  // Fetch available dates and months from backend on initial mount
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchPeriods() {
+      try {
+        const res = await fetchDashboardApi('/api/dashboard/periods');
+        if (res && res.ok) {
+          const data = await res.json();
+          if (isMounted && data && Array.isArray(data.dates)) {
+            setBackendPeriods({
+              dates: data.dates,
+              months: Array.isArray(data.months) ? data.months : []
+            });
+            if (data.dates.length > 0) {
+              setSelectedDate((prev) => (prev && data.dates.some((d) => d.value === prev) ? prev : data.dates[0].value));
+            }
+            if (data.months && data.months.length > 0) {
+              setSelectedMonth((prev) => (prev && data.months.some((m) => m.value === prev) ? prev : data.months[0].value));
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Backend dashboard periods fetch note:", err);
+      }
+    }
+    fetchPeriods();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Fetch trend points for the selected period from backend
+  useEffect(() => {
+    let isMounted = true;
+    const currentVal = periodType === 'daily' ? selectedDate : selectedMonth;
+    if (!currentVal) return;
+
+    async function fetchTrends() {
+      setIsTrendsLoading(true);
+      setTrendsError(null);
+      try {
+        const queryParam = periodType === 'daily'
+          ? `date=${encodeURIComponent(selectedDate)}`
+          : `month=${encodeURIComponent(selectedMonth)}`;
+        const res = await fetchDashboardApi(`/api/dashboard/trends?period=${periodType}&${queryParam}`);
+        if (res && res.ok) {
+          const data = await res.json();
+          if (isMounted && data && Array.isArray(data.points)) {
+            setTrendPointsData(data.points);
+          }
+        } else {
+          if (isMounted && res) {
+            setTrendsError(`Backend returned HTTP ${res.status}`);
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          setTrendsError(err.message || "Failed to load trend data");
+        }
+      } finally {
+        if (isMounted) {
+          setIsTrendsLoading(false);
+        }
+      }
+    }
+
+    fetchTrends();
+    return () => {
+      isMounted = false;
+    };
+  }, [periodType, selectedDate, selectedMonth]);
 
   // Close report format dropdown when clicking outside or pressing Escape
   useEffect(() => {
@@ -76,7 +242,6 @@ export default function ExecutiveDashboard({
   };
 
   // SINGLE SOURCE OF TRUTH: All metrics derive directly from analyzedPcaps[]
-  const displayPcaps = Array.isArray(analyzedPcaps) ? analyzedPcaps : [];
   const securityStats = stats || deriveSecurityStats(displayPcaps);
 
   const totalReports = securityStats.total;
@@ -153,8 +318,9 @@ export default function ExecutiveDashboard({
     };
   };
 
-  // Derive date-wise points completely dynamically from analyzedPcaps[]
-  const dayTrendPoints = deriveDailyTrends(displayPcaps);
+  // Derive date-wise points dynamically: prefer backend filtered data from Supabase, fallback to displayPcaps derivation
+  const fallbackTrendPoints = deriveDailyTrends(displayPcaps);
+  const dayTrendPoints = trendPointsData !== null ? trendPointsData : fallbackTrendPoints;
   const numDays = dayTrendPoints.length;
 
   // Chart layout metrics for crisp enterprise SOC charts
@@ -418,19 +584,125 @@ export default function ExecutiveDashboard({
         </div>
       </section>
 
+      {/* FILTER CONTROLS: PERIOD TYPE & PERIOD VALUE (ABOVE THE TWO EXISTING GRAPHS) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 rounded-xl px-5 py-3.5 border border-slate-200 dark:border-slate-800 shadow-xs transition-colors duration-150">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">tune</span>
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+            Trend Period Filter
+          </span>
+          {isTrendsLoading && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500 font-sans ml-2">
+              <span className="material-symbols-outlined text-[14px] animate-spin text-[#006591] dark:text-sky-400">progress_activity</span>
+              <span>Loading trend data...</span>
+            </span>
+          )}
+          {trendsError && (
+            <span className="text-[11px] text-rose-500 font-sans ml-2">
+              {trendsError}
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          {/* 1. PERIOD TYPE dropdown */}
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="period-type-select" className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 font-sans uppercase tracking-wider">
+              Period:
+            </label>
+            <div className="relative inline-block">
+              <select
+                id="period-type-select"
+                value={periodType}
+                onChange={(e) => {
+                  const newType = e.target.value;
+                  setPeriodType(newType);
+                  if (newType === 'daily') {
+                    if (effectiveDates.length > 0) {
+                      setSelectedDate(effectiveDates[0].value);
+                    }
+                  } else {
+                    if (effectiveMonths.length > 0) {
+                      setSelectedMonth(effectiveMonths[0].value);
+                    }
+                  }
+                }}
+                className="appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold rounded-lg pl-3 pr-8 py-1.5 hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-1.5 focus:ring-[#006591] dark:focus:ring-sky-500 cursor-pointer transition-colors"
+              >
+                <option value="daily">Daily</option>
+                <option value="monthly">Monthly</option>
+              </select>
+              <span className="material-symbols-outlined text-[16px] text-slate-400 dark:text-slate-500 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                expand_more
+              </span>
+            </div>
+          </div>
+
+          {/* 2. PERIOD VALUE dropdown */}
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="period-value-select" className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 font-sans uppercase tracking-wider">
+              {periodType === 'daily' ? 'Date:' : 'Month:'}
+            </label>
+            <div className="relative inline-block">
+              <select
+                id="period-value-select"
+                value={periodType === 'daily' ? selectedDate : selectedMonth}
+                onChange={(e) => {
+                  if (periodType === 'daily') {
+                    setSelectedDate(e.target.value);
+                  } else {
+                    setSelectedMonth(e.target.value);
+                  }
+                }}
+                className="appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold rounded-lg pl-3 pr-8 py-1.5 hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-1.5 focus:ring-[#006591] dark:focus:ring-sky-500 cursor-pointer transition-colors min-w-[130px]"
+              >
+                {periodType === 'daily' ? (
+                  effectiveDates.length === 0 ? (
+                    <option value="">No dates available</option>
+                  ) : (
+                    effectiveDates.map((d) => (
+                      <option key={d.value} value={d.value}>
+                        {d.label}
+                      </option>
+                    ))
+                  )
+                ) : (
+                  effectiveMonths.length === 0 ? (
+                    <option value="">No months available</option>
+                  ) : (
+                    effectiveMonths.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))
+                  )
+                )}
+              </select>
+              <span className="material-symbols-outlined text-[16px] text-slate-400 dark:text-slate-500 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                expand_more
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* 2. TREND SECTION: TWO SEPARATE DATE-WISE CHARTS */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* CHART 1: DAILY SECURITY STATUS */}
+        {/* CHART 1: DAILY / MONTHLY SECURITY STATUS */}
         <div className="bg-white dark:bg-slate-900 rounded-xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col gap-4 transition-colors duration-150">
           {/* Card Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">verified_user</span>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Daily Security Status</h2>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                  {periodType === 'monthly' ? 'Monthly Security Status' : 'Daily Security Status'}
+                </h2>
               </div>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                Analyzed PCAP reports classified by cryptographic & security baseline
+                {periodType === 'monthly'
+                  ? 'Analyzed PCAP reports across the selected month classified by cryptographic baseline'
+                  : 'Analyzed PCAP reports classified by cryptographic & security baseline'}
               </span>
             </div>
 
@@ -655,7 +927,9 @@ export default function ExecutiveDashboard({
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">query_stats</span>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Daily Risk Score Trend</h2>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                  {periodType === 'monthly' ? 'Monthly Risk Score Trend' : 'Daily Risk Score Trend'}
+                </h2>
                 {trendTrajectory && (
                   <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${trendTrajectory.colorClass}`}>
                     <span className="material-symbols-outlined text-[12px]">{trendTrajectory.icon}</span>
@@ -664,7 +938,9 @@ export default function ExecutiveDashboard({
                 )}
               </div>
               <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                Day-by-day fleet average AI risk score trajectory (0–100 scale)
+                {periodType === 'monthly'
+                  ? 'Fleet average AI risk score trajectory across the selected month (0–100 scale)'
+                  : 'Fleet average AI risk score trajectory across the selected day (0–100 scale)'}
               </span>
             </div>
 

@@ -15,6 +15,8 @@ from app.storage.repository import (
     get_analysis_results,
     get_analysis_result,
     delete_analysis_result,
+    get_available_periods,
+    get_dashboard_trends,
 )
 
 logger = logging.getLogger("securemailscope")
@@ -195,6 +197,56 @@ def delete_capture_endpoint(capture_id: str):
     except Exception as e:
         logger.error(f"Failed to delete capture '{capture_id}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete capture: {str(e)}")
+
+
+@app.get("/api/dashboard/periods")
+def get_dashboard_periods_endpoint():
+    """
+    Retrieves available filter periods (dates and months) generated dynamically
+    from actual 'analysis_results.analyzed_at' values in Supabase.
+    Credentials remain backend-only.
+    """
+    if not is_supabase_configured():
+        return {"dates": [], "months": []}
+    try:
+        return get_available_periods()
+    except Exception as e:
+        logger.error(f"Failed to fetch dashboard periods from Supabase: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve dashboard periods: {str(e)}")
+
+
+@app.get("/api/dashboard/trends")
+def get_dashboard_trends_endpoint(
+    period: str = "daily",
+    date: Optional[str] = None,
+    month: Optional[str] = None
+):
+    """
+    Retrieves trend and security status aggregation points for the Executive Dashboard graphs
+    filtered strictly by Daily or Monthly period from Supabase 'analysis_results'.
+    Performs careful date/time boundary queries against timestamptz analyzed_at.
+    """
+    if period not in ("daily", "monthly"):
+        raise HTTPException(status_code=400, detail="Invalid period type. Must be 'daily' or 'monthly'.")
+    if not is_supabase_configured():
+        return {
+            "period": period,
+            "date": date,
+            "month": month,
+            "points": [],
+            "summary": {
+                "total": 0, "secure": 0, "insecure": 0,
+                "securePct": 0, "insecurePct": 0, "avgRisk": None, "totalSessions": 0
+            }
+        }
+    try:
+        return get_dashboard_trends(period=period, date_str=date, month_str=month)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to fetch dashboard trends from Supabase: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve dashboard trends: {str(e)}")
+
 
 
 @app.post("/api/ml/baseline/train")
