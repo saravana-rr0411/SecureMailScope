@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
 
+const WINDOWS_AGENT_DOWNLOAD_URL = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download/SecureMailScopeCaptureAgent-1.0.0-Setup.exe";
+const MACOS_AGENT_DOWNLOAD_URL = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download/SecureMailScopeCaptureAgent-1.0.0.pkg";
+const NPCAP_OFFICIAL_URL = "https://npcap.com/#download";
+
+function detectClientOS() {
+  if (typeof window === 'undefined') return 'windows';
+  const ua = (navigator.userAgent || '').toLowerCase();
+  const plat = (navigator.platform || '').toLowerCase();
+  if (ua.includes('win') || plat.includes('win')) return 'windows';
+  if (ua.includes('mac') || plat.includes('mac')) return 'macos';
+  return 'windows';
+}
+
 export default function OverviewScreen({
   capture,
   analyzedPcaps = [],
@@ -22,6 +35,8 @@ export default function OverviewScreen({
   const [agentInfo, setAgentInfo] = useState(null);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [isRetryingAgent, setIsRetryingAgent] = useState(false);
+  const clientOS = detectClientOS();
+  const [selectedOsTab, setSelectedOsTab] = useState(() => detectClientOS());
 
   // Countdown timer effect for Gmail live capture window
   useEffect(() => {
@@ -399,6 +414,100 @@ export default function OverviewScreen({
           )}
         </div>
       </header>
+
+      {/* CAPTURE AGENT SETUP GUIDANCE BANNER (Shown when agent is not detected) */}
+      {agentStatus === 'not_detected' && (
+        <div
+          id="agent-setup-guidance-banner"
+          className="p-4 sm:p-5 rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs transition-colors"
+        >
+          <div className="flex items-start gap-3.5">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/50 border border-amber-200 dark:border-amber-700/60 flex items-center justify-center text-amber-700 dark:text-amber-400 shrink-0 mt-0.5">
+              <span className="material-symbols-outlined text-[20px]">sensors_off</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                  {clientOS === 'windows' ? 'Windows Capture Agent Required' : 'macOS Capture Agent Required'}
+                </h2>
+                <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded bg-amber-200/80 dark:bg-amber-900/70 text-amber-900 dark:text-amber-300">
+                  {clientOS === 'windows' ? 'Windows' : 'macOS'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
+                {clientOS === 'windows'
+                  ? 'Npcap is required for genuine Windows packet capture. Download and install Npcap first, then run the SecureMailScope Capture Agent installer.'
+                  : 'Install the SecureMailScope Capture Agent background service to record genuine email packets on port 587 and 2525.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap shrink-0">
+            {clientOS === 'windows' ? (
+              <>
+                <a
+                  id="btn-download-npcap"
+                  href={NPCAP_OFFICIAL_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Download official Npcap packet capture driver for Windows (npcap.com)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[15px]">open_in_new</span>
+                  <span>Download Npcap</span>
+                </a>
+                <a
+                  id="btn-download-windows-agent"
+                  href={WINDOWS_AGENT_DOWNLOAD_URL}
+                  download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+                  title="Download SecureMailScope Capture Agent for Windows (.exe)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[15px]">download</span>
+                  <span>Download Windows Capture Agent</span>
+                </a>
+              </>
+            ) : (
+              <a
+                id="btn-download-macos-agent"
+                href={MACOS_AGENT_DOWNLOAD_URL}
+                download="SecureMailScopeCaptureAgent-1.0.0.pkg"
+                title="Download SecureMailScope Capture Agent for macOS (.pkg)"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[15px]">download</span>
+                <span>Download macOS Agent (.pkg)</span>
+              </a>
+            )}
+            <button
+              id="btn-check-agent-connection"
+              type="button"
+              onClick={async () => {
+                setIsRetryingAgent(true);
+                await checkAgentHealth();
+                setIsRetryingAgent(false);
+              }}
+              disabled={isRetryingAgent}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 text-xs font-medium shadow-2xs transition-all cursor-pointer disabled:opacity-60"
+            >
+              <span className={`material-symbols-outlined text-[15px] ${isRetryingAgent ? 'animate-spin' : ''}`}>
+                {isRetryingAgent ? 'progress_activity' : 'refresh'}
+              </span>
+              <span>Check Connection</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOsTab(clientOS);
+                setShowAgentModal(true);
+              }}
+              className="px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-medium underline underline-offset-2 cursor-pointer"
+            >
+              Setup Guide
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Active Live Gmail Capture Notification Banner */}
       {gmailCaptureStep === 'listening' && (
@@ -972,7 +1081,7 @@ export default function OverviewScreen({
           aria-modal="true"
           aria-labelledby="agent-modal-title"
         >
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full p-6 flex flex-col gap-4 text-slate-800 dark:text-slate-100 animate-in zoom-in-95 duration-150">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-xl w-full p-6 flex flex-col gap-4 text-slate-800 dark:text-slate-100 animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
             {/* Modal Header */}
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -981,7 +1090,7 @@ export default function OverviewScreen({
                 </div>
                 <div>
                   <h3 id="agent-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
-                    Local Capture Agent Required
+                    Capture Agent Setup &amp; Prerequisite Guide
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     Authentic network packet recording requires the agent service
@@ -998,36 +1107,152 @@ export default function OverviewScreen({
               </button>
             </div>
 
-            {/* Modal Content */}
-            <div className="text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-3">
-              <p>
-                SecureMailScope generates genuine, non-synthetic PCAP captures by executing authentic email protocol exchanges and capturing packets directly on your computer.
-              </p>
-              <p>
-                To generate authentic captures locally, please start or install the background Capture Agent on this machine:
-              </p>
-
-              {/* Step / Command Box */}
-              <div className="bg-slate-950 text-slate-200 rounded-xl p-3.5 font-mono text-[11px] flex flex-col gap-1.5 border border-slate-800">
-                <div className="text-slate-400 text-[10px] font-sans font-semibold uppercase tracking-wider">
-                  Terminal Command (Run Locally)
-                </div>
-                <div className="text-sky-300 select-all font-semibold">
-                  cd capture_agent/macos &amp;&amp; sudo ./install.sh
-                </div>
-                <div className="text-slate-400 text-[10px] font-sans mt-0.5">
-                  Or launch manually: <span className="font-mono text-slate-300">sudo .venv/bin/python capture_agent/main.py</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 text-[11px]">
-                <span className="material-symbols-outlined text-[16px] text-sky-500 shrink-0">info</span>
-                <span>The agent runs locally on your system, captures loopback test traffic, and only accepts connections from localhost.</span>
-              </div>
+            {/* Operating System Selection Tabs */}
+            <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/60 text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedOsTab('windows')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg font-semibold transition-all cursor-pointer ${
+                  selectedOsTab === 'windows'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px]">desktop_windows</span>
+                <span>Windows</span>
+                {clientOS === 'windows' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/70 text-sky-700 dark:text-sky-300 uppercase font-bold tracking-wider">
+                    Detected
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedOsTab('macos')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg font-semibold transition-all cursor-pointer ${
+                  selectedOsTab === 'macos'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px]">laptop_mac</span>
+                <span>macOS</span>
+                {clientOS === 'macos' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/70 text-sky-700 dark:text-sky-300 uppercase font-bold tracking-wider">
+                    Detected
+                  </span>
+                )}
+              </button>
             </div>
 
+            {/* Modal Content Based on Selected OS */}
+            {selectedOsTab === 'windows' ? (
+              <div className="text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-3.5">
+                <p>
+                  SecureMailScope records genuine, non-synthetic PCAP captures by sniffing live SMTP traffic (port 587 and 2525) directly on your Windows PC.
+                </p>
+
+                {/* Step 1: Npcap Prerequisite */}
+                <div className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/70 dark:bg-amber-950/20 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-bold text-amber-950 dark:text-amber-300 text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-amber-200 dark:bg-amber-900/80 text-amber-900 dark:text-amber-200 flex items-center justify-center text-[10px] font-bold">1</span>
+                      Install Npcap Driver (Prerequisite)
+                    </span>
+                    <a
+                      href={NPCAP_OFFICIAL_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                      <span>Download Npcap (npcap.com)</span>
+                    </a>
+                  </div>
+                  <p className="text-[11px] text-amber-900/90 dark:text-amber-300/90 leading-relaxed">
+                    Npcap is required for genuine Windows packet capture. Download the official installer from npcap.com. During installation, make sure to check:
+                  </p>
+                  <div className="p-2 rounded bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 font-mono text-[11px] text-amber-950 dark:text-amber-200 font-semibold">
+                    ✓ &quot;Install Npcap in WinPcap API-compatible Mode&quot;
+                  </div>
+                </div>
+
+                {/* Step 2: Windows Capture Agent Installer */}
+                <div className="p-3.5 rounded-xl border border-sky-200 dark:border-sky-800/60 bg-sky-50/70 dark:bg-sky-950/20 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-bold text-sky-950 dark:text-sky-300 text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-sky-200 dark:bg-sky-900/80 text-sky-900 dark:text-sky-200 flex items-center justify-center text-[10px] font-bold">2</span>
+                      Install SecureMailScope Capture Agent
+                    </span>
+                    <a
+                      href={WINDOWS_AGENT_DOWNLOAD_URL}
+                      download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">download</span>
+                      <span>Download Windows Capture Agent</span>
+                    </a>
+                  </div>
+                  <p className="text-[11px] text-sky-900/90 dark:text-sky-300/90 leading-relaxed">
+                    Run <span className="font-mono font-semibold">SecureMailScopeCaptureAgent-1.0.0-Setup.exe</span> once. It installs to <span className="font-mono text-[10px]">C:\Program Files\SecureMailScope\CaptureAgent</span>, registers the <span className="font-mono text-[10px]">SecureMailScopeCaptureAgent</span> Windows Service, and starts capture automatically.
+                  </p>
+                </div>
+
+                {/* Step 3: Check Connection */}
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 text-[11px]">
+                  <span className="material-symbols-outlined text-[16px] text-emerald-500 shrink-0">verified</span>
+                  <span>Once installed, click &quot;Check Connection&quot; below to verify readiness and enable authentic capture controls.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-3.5">
+                <p>
+                  SecureMailScope records genuine, non-synthetic PCAP captures by executing authentic email protocol exchanges directly on your Mac.
+                </p>
+
+                {/* macOS Installer Package (.pkg) */}
+                <div className="p-3.5 rounded-xl border border-sky-200 dark:border-sky-800/60 bg-sky-50/70 dark:bg-sky-950/20 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-bold text-sky-950 dark:text-sky-300 text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-sky-200 dark:bg-sky-900/80 text-sky-900 dark:text-sky-200 flex items-center justify-center text-[10px] font-bold">1</span>
+                      Download macOS Installer (.pkg)
+                    </span>
+                    <a
+                      href={MACOS_AGENT_DOWNLOAD_URL}
+                      download="SecureMailScopeCaptureAgent-1.0.0.pkg"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">download</span>
+                      <span>Download macOS Agent (.pkg)</span>
+                    </a>
+                  </div>
+                  <p className="text-[11px] text-sky-900/90 dark:text-sky-300/90 leading-relaxed">
+                    Double-click the .pkg package to install. Registers the <span className="font-mono text-[10px]">com.securemailscope.captureagent</span> LaunchDaemon and starts listening strictly on 127.0.0.1:9000.
+                  </p>
+                </div>
+
+                {/* Terminal Alternative for macOS */}
+                <div className="bg-slate-950 text-slate-200 rounded-xl p-3.5 font-mono text-[11px] flex flex-col gap-1.5 border border-slate-800">
+                  <div className="text-slate-400 text-[10px] font-sans font-semibold uppercase tracking-wider">
+                    Terminal Quick Command (Run Locally)
+                  </div>
+                  <div className="text-sky-300 select-all font-semibold">
+                    cd capture_agent/macos &amp;&amp; sudo ./install.sh
+                  </div>
+                  <div className="text-slate-400 text-[10px] font-sans mt-0.5">
+                    Or launch standalone: <span className="font-mono text-slate-300">sudo .venv/bin/python capture_agent/main.py</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 text-[11px]">
+                  <span className="material-symbols-outlined text-[16px] text-sky-500 shrink-0">info</span>
+                  <span>The agent runs as a native system daemon, binds strictly to 127.0.0.1:9000, and captures only authorized mail ports.</span>
+                </div>
+              </div>
+            )}
+
             {/* Modal Actions */}
-            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex-wrap">
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100 dark:border-slate-800 flex-wrap">
               <button
                 type="button"
                 onClick={async () => {
@@ -1044,7 +1269,7 @@ export default function OverviewScreen({
                 <span className={`material-symbols-outlined text-[16px] ${isRetryingAgent ? 'animate-spin' : ''}`}>
                   {isRetryingAgent ? 'progress_activity' : 'refresh'}
                 </span>
-                <span>{isRetryingAgent ? 'Checking...' : 'Check Connection Again'}</span>
+                <span>{isRetryingAgent ? 'Checking...' : 'Check Connection'}</span>
               </button>
 
               <div className="flex items-center gap-2">
