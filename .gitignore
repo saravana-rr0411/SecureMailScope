@@ -16,3 +16,4 @@ scratch/
 frontend/.backup/
 frontend/*_report.pdf
 build/
+capture_agent/windows/vendor/

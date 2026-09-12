@@ -106,6 +106,7 @@ class PacketCapturer:
         self.interface = interface or get_capture_interface(self.ports)
         self._process: Optional[subprocess.Popen] = None
         self._is_capturing = False
+        self._windows_sniffer = None
 
     @property
     def bpf_filter(self) -> str:
@@ -122,13 +123,11 @@ class PacketCapturer:
 
     def start(self, settle_delay: float = 0.2):
         """
-        Starts the tcpdump capture process with strict BPF filter.
+        Starts the packet capture process with strict BPF filter.
+        - On Windows: Dispatches to WindowsPacketSniffer (Scapy + Npcap)
+        - On macOS / Linux: Spawns tcpdump with strict BPF filter
         Raises PermissionError or RuntimeError if capture cannot be initiated.
         """
-        tcpdump_bin = get_tcpdump_binary()
-        if not tcpdump_bin:
-            raise RuntimeError("tcpdump binary not found on the system.")
-
         # Ensure output directory exists
         out_dir = Path(self.output_pcap_path).parent
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -140,8 +139,27 @@ class PacketCapturer:
             except Exception:
                 pass
 
-        # Strict BPF filter targeting only authorized mail submission ports
         bpf_filter = self.build_bpf_filter()
+
+        # Windows platform dispatch
+        if get_current_os() == "windows":
+            can_cap, cap_diag, requires_admin = check_capture_capabilities(self.interface)
+            if not can_cap:
+                raise RuntimeError(cap_diag)
+            from capture_agent.recorder.windows_sniffer import WindowsPacketSniffer
+            self._windows_sniffer = WindowsPacketSniffer(
+                output_pcap_path=self.output_pcap_path,
+                bpf_filter=bpf_filter,
+                interface=self.interface
+            )
+            self._windows_sniffer.start(settle_delay=settle_delay)
+            self._is_capturing = True
+            logger.info(f"WindowsPacketSniffer successfully started on '{self.interface}'")
+            return
+
+        tcpdump_bin = get_tcpdump_binary()
+        if not tcpdump_bin:
+            raise RuntimeError("tcpdump binary not found on the system.")
 
         can_cap, cap_diag, requires_sudo = check_capture_capabilities(self.interface)
         use_sudo = requires_sudo or os.environ.get("CAPTURE_USE_SUDO", "0").lower() in ("1", "true", "yes")
@@ -225,9 +243,17 @@ class PacketCapturer:
 
     def stop(self, timeout: float = 3.0) -> str:
         """
-        Stops the tcpdump process using SIGINT (allowing libpcap to cleanly flush headers and packet records)
-        and verifies the resulting PCAP file.
+        Stops the packet capture process:
+        - On Windows: Signals WindowsPacketSniffer and flushes libpcap file.
+        - On macOS / Linux: Sends SIGINT to tcpdump and verifies the resulting PCAP.
         """
+        if self._windows_sniffer:
+            try:
+                return self._windows_sniffer.stop(timeout=timeout)
+            finally:
+                self._is_capturing = False
+                self._windows_sniffer = None
+
         if not self._process or not self._is_capturing:
             logger.warning("PacketCapturer stop() called but capture was not running.")
             return self.output_pcap_path
@@ -278,6 +304,8 @@ class PacketCapturer:
 
     @property
     def is_running(self) -> bool:
+        if self._windows_sniffer:
+            return self._windows_sniffer.is_running
         return self._is_capturing and self._process is not None and self._process.poll() is None
 
 

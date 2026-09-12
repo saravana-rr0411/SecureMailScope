@@ -9,7 +9,10 @@ from typing import Tuple, Optional
 
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
+if platform.system().lower() == "windows" and os.environ.get("PROGRAMDATA"):
+    DEFAULT_STORAGE_DIR = Path(os.environ["PROGRAMDATA"]) / "SecureMailScope" / "CaptureAgent" / "storage"
+else:
+    DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
 
 # Environment configuration
 CAPTURE_AGENT_SECRET_KEY = os.environ.get("CAPTURE_AGENT_SECRET_KEY", "").strip()
@@ -90,10 +93,59 @@ def get_capture_ports() -> list[int]:
     return list(DEFAULT_CAPTURE_PORTS)
 
 
+def is_npcap_installed() -> bool:
+    """
+    Checks if Npcap / WinPcap packet capture driver is installed on Windows.
+    Checks standard Windows system directories for wpcap.dll or Packet.dll.
+    """
+    if get_current_os() != "windows":
+        return False
+
+    sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+    npcap_paths = [
+        os.path.join(sys_root, "System32", "Npcap", "wpcap.dll"),
+        os.path.join(sys_root, "System32", "wpcap.dll"),
+        os.path.join(sys_root, "SysWOW64", "Npcap", "wpcap.dll"),
+        os.path.join(sys_root, "SysWOW64", "wpcap.dll"),
+    ]
+    for p in npcap_paths:
+        if os.path.exists(p):
+            return True
+
+    # Also check if npcap service exists
+    try:
+        out = subprocess.run(
+            ["sc", "query", "npcap"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2
+        )
+        if out.returncode == 0 and "RUNNING" in out.stdout.upper():
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def is_windows_admin() -> bool:
+    """Checks whether current process on Windows has elevated Administrator rights."""
+    if get_current_os() != "windows":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 def detect_loopback_interface() -> str:
     """
     Detects appropriate loopback interface for packet capture.
-    macOS uses 'lo0', while Linux uses 'lo'.
+    - macOS: 'lo0'
+    - Linux: 'lo'
+    - Windows: Npcap Loopback adapter or \\Device\\NPF_Loopback
     Can be overridden via CAPTURE_INTERFACE environment variable.
     """
     explicit = os.environ.get("CAPTURE_INTERFACE")
@@ -103,6 +155,18 @@ def detect_loopback_interface() -> str:
     current_os = get_current_os()
     if current_os == "darwin":
         return "lo0"
+    elif current_os == "windows":
+        # Check Scapy Windows ifaces for loopback
+        try:
+            from scapy.all import conf
+            for iface_name, iface in conf.ifaces.items():
+                desc = getattr(iface, "description", "") or ""
+                name = getattr(iface, "name", "") or ""
+                if "loopback" in desc.lower() or "loopback" in name.lower() or "npf_loopback" in str(iface_name).lower():
+                    return str(iface_name)
+        except Exception:
+            pass
+        return r"\Device\NPF_Loopback"
     return "lo"
 
 
@@ -146,6 +210,26 @@ def detect_active_interface() -> str:
         except Exception:
             pass
         return "eth0"
+    elif current_os == "windows":
+        # 1. Try PowerShell Get-NetRoute for default gateway interface alias (e.g. 'Wi-Fi' or 'Ethernet')
+        try:
+            cmd = [
+                "powershell", "-NoProfile", "-Command",
+                "(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Select-Object -First 1).InterfaceAlias"
+            ]
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=3).strip()
+            if out:
+                return out
+        except Exception:
+            pass
+        # 2. Try Scapy's default route interface
+        try:
+            from scapy.all import conf
+            if conf.iface:
+                return str(conf.iface)
+        except Exception:
+            pass
+        return "Ethernet"
     return detect_loopback_interface()
 
 
@@ -165,7 +249,7 @@ def get_capture_interface(ports: Optional[list[int]] = None) -> str:
 
 
 def get_tcpdump_binary() -> Optional[str]:
-    """Finds path to system tcpdump binary."""
+    """Finds path to system tcpdump binary (macOS / Linux)."""
     return shutil.which("tcpdump") or ("/usr/sbin/tcpdump" if os.path.exists("/usr/sbin/tcpdump") else None)
 
 
@@ -174,12 +258,32 @@ def check_capture_capabilities(interface: Optional[str] = None) -> Tuple[bool, s
     Checks whether the current environment and process has capabilities to capture packets.
     Returns (can_capture, diagnostic_message, requires_sudo).
     """
+    current_os = get_current_os()
+
+    # Windows capability validation (Npcap + Admin rights)
+    if current_os == "windows":
+        has_npcap = is_npcap_installed()
+        has_admin = is_windows_admin()
+        if not has_npcap:
+            diag = (
+                "Npcap packet capture driver is not installed on this Windows system.\n"
+                "Please download and install Npcap from: https://npcap.com/#download\n"
+                "(Ensure 'Install Npcap in WinPcap API-compatible Mode' is enabled)."
+            )
+            return False, diag, False
+        if not has_admin:
+            diag = (
+                "Capture Agent is running without Administrator privileges.\n"
+                "Please start the agent as Administrator or run via the installed Windows Service."
+            )
+            return True, diag, True
+        return True, "Full packet capture capability available via Npcap.", False
+
     tcpdump_path = get_tcpdump_binary()
     if not tcpdump_path:
         return False, "tcpdump binary not found in PATH or /usr/sbin/tcpdump.", False
 
     iface = interface or detect_loopback_interface()
-    current_os = get_current_os()
 
     # 1. Check direct BPF device access on macOS
     if current_os == "darwin" and os.path.exists("/dev/bpf0"):
@@ -212,7 +316,7 @@ def check_capture_capabilities(interface: Optional[str] = None) -> Tuple[bool, s
     except Exception:
         pass
 
-    # 3. If neither worked, provide clear, safe diagnostic instructions
+    # 4. If neither worked, provide clear, safe diagnostic instructions
     if current_os == "darwin":
         diag = (
             f"Permission denied accessing /dev/bpf* on macOS for interface '{iface}'.\n"

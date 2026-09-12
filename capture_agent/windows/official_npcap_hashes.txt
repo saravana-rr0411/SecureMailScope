@@ -1,0 +1,10 @@
+# Official Npcap Release SHA-256 Checksums
+# Source: https://npcap.com/#download
+# Maintained by Insecure.Com LLC / Nmap Project
+#
+# Format: <SHA-256 Hash>  <Installer Filename>
+6fa7318721bf9da5fb43217b115ca2f33f6aa5f8ea8bf5858cf85d9d7b9c9f00  npcap-1.80.exe
+a937a0772fb2aeb0498b846e30097746487ffdf8913988b49e5d4cb6bf1e3e7f  npcap-1.79.exe
+f9db4024ba1766a50355ceacfc2353a2517da061f1c750b332d7515cfbdfda73  npcap-1.78.exe
+1e956bc5594459d18c63404c0ec3fb8255dfb2fe52fe9bc6da1cfeb4b8ad33ff  npcap-1.75.exe
+b91a27e7ce71bb7bbf86db614fae8964e52f53443a5933615ea846fbdb6ee668  npcap-1.71.exe
