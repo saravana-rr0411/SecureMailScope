@@ -62,12 +62,18 @@ touch /var/log/securemailscope-capture-agent.log /var/log/securemailscope-captur
 chmod 640 /var/log/securemailscope-capture-agent.log /var/log/securemailscope-capture-agent.error.log
 chown root:wheel /var/log/securemailscope-capture-agent.log /var/log/securemailscope-capture-agent.error.log
 
+AGENT_SECRET="${CAPTURE_AGENT_SECRET_KEY:-${CAPTURE_AGENT_API_KEY:-}}"
+if [[ -z "${AGENT_SECRET}" && -f "${ROOT_DIR}/.env" ]]; then
+    AGENT_SECRET=$(grep -E '^(CAPTURE_AGENT_API_KEY|CAPTURE_AGENT_SECRET_KEY)=' "${ROOT_DIR}/.env" | head -n 1 | cut -d '=' -f2- | tr -d '"' | tr -d "'" || true)
+fi
+
 sed -e "s|__APP_DIR__|${ROOT_DIR}|g" \
     -e "s|__PYTHON_BIN__|${PYTHON_BIN}|g" \
+    -e "s|__AGENT_SECRET_KEY__|${AGENT_SECRET}|g" \
     "${TEMPLATE_PLIST}" > "${TARGET_PLIST}"
 
 chown root:wheel "${TARGET_PLIST}"
-chmod 644 "${TARGET_PLIST}"
+chmod 600 "${TARGET_PLIST}"
 
 # 6. Load and start the background daemon via launchd
 echo "[*] Registering and launching background service with launchctl..."

@@ -4,6 +4,9 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
+# Ensure test environment key for testability
+os.environ.setdefault("CAPTURE_AGENT_SECRET_KEY", "test-agent-secret-key")
+
 from capture_agent.main import app, capture_lock
 from capture_agent.config import (
     CAPTURE_AGENT_SECRET_KEY,

@@ -12,13 +12,21 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
 
 # Environment configuration
-CAPTURE_AGENT_SECRET_KEY = os.environ.get("CAPTURE_AGENT_SECRET_KEY", "sms-capture-secret-dev-key")
+CAPTURE_AGENT_SECRET_KEY = os.environ.get("CAPTURE_AGENT_SECRET_KEY", "").strip()
 AGENT_HOST = os.environ.get("AGENT_HOST", "127.0.0.1")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "9000"))
 LOCAL_ONLY = os.environ.get("CAPTURE_AGENT_LOCAL_ONLY", "true").lower() in ("1", "true", "yes")
 
 # Ephemeral Handshake Token TTL (seconds)
 HANDSHAKE_TOKEN_TTL_SECONDS = int(os.environ.get("HANDSHAKE_TOKEN_TTL_SECONDS", "60"))
+
+# WebSocket Bridge Configuration (outbound connection to Render backend)
+BACKEND_WS_URL = os.environ.get(
+    "BACKEND_WS_URL",
+    "wss://securemailscope-130k.onrender.com/ws/agent"
+)
+WS_HEARTBEAT_INTERVAL = int(os.environ.get("WS_HEARTBEAT_INTERVAL", "30"))
+WS_RECONNECT_MAX_DELAY = int(os.environ.get("WS_RECONNECT_MAX_DELAY", "60"))
 
 # Strict Allowed Origins for Web Frontend CORS & Handshake (NO WILDCARD)
 DEFAULT_ALLOWED_ORIGINS = [

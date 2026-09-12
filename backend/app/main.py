@@ -1,10 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 import os
 import shutil
 import tempfile
 import datetime
+import json
+import uuid
 import logging
 from app.capture.pcap_reader import analyze_pcap
 from app.ml.anomaly_detector import detector_instance, create_synthetic_development_baseline
@@ -23,6 +25,7 @@ from app.capture.agent_client import (
     get_capture_agent_status,
     is_capture_agent_configured,
 )
+from app.capture.agent_hub import agent_hub
 
 logger = logging.getLogger("securemailscope")
 
@@ -233,17 +236,6 @@ def get_dashboard_trends_endpoint(
     """
     if period not in ("daily", "monthly"):
         raise HTTPException(status_code=400, detail="Invalid period type. Must be 'daily' or 'monthly'.")
-    if not is_supabase_configured():
-        return {
-            "period": period,
-            "date": date,
-            "month": month,
-            "points": [],
-            "summary": {
-                "total": 0, "secure": 0, "insecure": 0,
-                "securePct": 0, "insecurePct": 0, "avgRisk": None, "totalSessions": 0
-            }
-        }
     try:
         return get_dashboard_trends(period=period, date_str=date, month_str=month)
     except ValueError as e:
@@ -259,11 +251,102 @@ async def capture_status_endpoint():
     return await get_capture_agent_status()
 
 
+@app.get("/api/agent/status")
+async def agent_status_endpoint():
+    """
+    Returns the live connectivity status of the Capture Agent.
+    Used by the frontend to show 'Local Agent Connected' / 'Not Detected' badge.
+    This works across all browsers (Safari, Chrome) because the frontend
+    only makes HTTPS requests to this backend, not to localhost.
+    """
+    info = agent_hub.get_agent_info()
+    if info["online"]:
+        # Surface the first agent's health details for UI display
+        first_agent = info["agents"][0] if info["agents"] else {}
+        health = first_agent.get("health", {})
+        return {
+            "status": "connected",
+            "agent": "SecureMailScope Capture Agent",
+            "version": health.get("version", "1.0.0"),
+            "os": health.get("os", "unknown"),
+            "can_capture": health.get("can_capture", True),
+            "is_busy": first_agent.get("is_busy", False),
+        }
+    else:
+        return {
+            "status": "not_detected",
+            "agent": None,
+            "message": "No Capture Agent is currently connected.",
+        }
+
+
+@app.websocket("/ws/agent")
+async def agent_websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for Capture Agents to establish persistent connections.
+    The agent connects outbound from the user's machine to this backend.
+    Authentication is via ?token= query parameter validated against CAPTURE_AGENT_API_KEY.
+    """
+    # Extract token from query parameters or Authorization header
+    token = websocket.query_params.get("token", "")
+    if not token:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split("Bearer ", 1)[1].strip()
+        elif auth_header:
+            token = auth_header.strip()
+
+    if not token:
+        await websocket.close(code=4001, reason="Missing authentication token")
+        return
+
+    # Authenticate before accepting
+    is_valid = await agent_hub.authenticate_agent(websocket, token)
+    if not is_valid:
+        await websocket.close(code=4003, reason="Invalid authentication token")
+        return
+
+    await websocket.accept()
+
+    # Generate unique agent ID for this connection
+    agent_id = f"agent-{uuid.uuid4().hex[:12]}"
+    agent = await agent_hub.register_agent(websocket, agent_id)
+
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if message.get("type") == "websocket.receive":
+                if "text" in message:
+                    try:
+                        data = json.loads(message["text"])
+                        await agent_hub.handle_agent_message(agent_id, data)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON from agent {agent_id}")
+                elif "bytes" in message:
+                    await agent_hub.handle_agent_binary(agent_id, message["bytes"])
+
+            elif message.get("type") == "websocket.disconnect":
+                break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning(f"Agent {agent_id} connection error: {e}")
+    finally:
+        await agent_hub.unregister_agent(agent_id)
+
+
 @app.post("/api/capture/generate-authentic")
 async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] = Body(None)):
     """
-    Triggers an authentic live network packet capture via the dedicated Capture Agent,
-    streams the genuine PCAP binary, executes the existing forensic analysis pipeline,
+    Triggers an authentic live network packet capture via the dedicated Capture Agent.
+
+    Priority order:
+    1. WebSocket Bridge — if an agent is connected via WS, relay the command
+    2. Direct HTTP — fallback to direct HTTP call to CAPTURE_AGENT_URL
+
+    Streams the genuine PCAP binary, executes the existing forensic analysis pipeline,
     persists the analysis in Supabase, and returns the result to the frontend.
     """
     protocol = "SMTP"
@@ -273,8 +356,29 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
         profile = payload.get("profile", "secure_tls12")
 
     tmp_path = None
+    filename = None
     try:
-        tmp_path, filename = await request_authentic_pcap(protocol=protocol, profile=profile)
+        # Path 1: Try WebSocket Bridge (agent connected outbound to this backend)
+        if agent_hub.is_agent_online():
+            try:
+                logger.info("Attempting capture via WebSocket Bridge...")
+                pending = await agent_hub.request_capture(protocol=protocol, profile=profile)
+                pcap_bytes, filename = await agent_hub.await_capture_result(pending)
+
+                # Write PCAP bytes to temp file for analysis
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pcap", prefix="sms_ws_cap_")
+                tmp_file.write(pcap_bytes)
+                tmp_file.close()
+                tmp_path = tmp_file.name
+
+                logger.info(f"Received PCAP via WebSocket Bridge: {filename} ({len(pcap_bytes)} bytes)")
+            except Exception as ws_err:
+                logger.warning(f"WebSocket Bridge capture failed, falling back to HTTP: {ws_err}")
+                tmp_path = None
+
+        # Path 2: Direct HTTP to Capture Agent (fallback)
+        if not tmp_path:
+            tmp_path, filename = await request_authentic_pcap(protocol=protocol, profile=profile)
 
         # Process through the existing analyze_pcap forensic pipeline
         result = analyze_pcap(tmp_path)

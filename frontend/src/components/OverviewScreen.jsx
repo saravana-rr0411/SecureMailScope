@@ -20,16 +20,62 @@ export default function OverviewScreen({
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [isRetryingAgent, setIsRetryingAgent] = useState(false);
 
-  // Check GET http://127.0.0.1:9000/health with silent error handling (no stack traces or console alerts)
+  // Check agent connectivity via backend API (works in all browsers: HTTPS→HTTPS)
+  // Falls back to direct localhost check for local development
   const checkAgentHealth = async () => {
+    // Determine API base from environment or relative path
+    const apiBase = import.meta.env.VITE_API_BASE ?? '';
+
     try {
+      // Primary: Check via backend WebSocket hub status (works in Safari/Chrome production)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const backendUrls = [];
+      if (apiBase) backendUrls.push(`${apiBase}/api/agent/status`);
+      backendUrls.push('/api/agent/status');
+      if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+        backendUrls.push('http://127.0.0.1:8000/api/agent/status');
+      }
+
+      for (const url of backendUrls) {
+        try {
+          const res = await fetch(url, {
+            method: 'GET',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.status === 'connected') {
+              setAgentStatus('connected');
+              setAgentInfo({
+                version: data.version || '1.0.0',
+                os: data.os,
+                can_capture: data.can_capture,
+                status: 'OK',
+              });
+              return true;
+            }
+          }
+        } catch {
+          // Try next URL
+        }
+      }
+      clearTimeout(timeoutId);
+    } catch {
+      // Silently handle errors
+    }
+
+    // Fallback: Direct localhost check (works only in local dev HTTP→HTTP)
+    try {
+      const controller2 = new AbortController();
+      const timeoutId2 = setTimeout(() => controller2.abort(), 2500);
       const res = await fetch('http://127.0.0.1:9000/health', {
         method: 'GET',
-        signal: controller.signal
+        signal: controller2.signal
       });
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutId2);
       if (res.ok) {
         const data = await res.json();
         if (data && data.status === 'OK') {
@@ -41,6 +87,7 @@ export default function OverviewScreen({
     } catch {
       // Offline or unreachable - silently treat as not detected
     }
+
     setAgentStatus('not_detected');
     setAgentInfo(null);
     return false;

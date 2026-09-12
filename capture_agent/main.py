@@ -7,6 +7,7 @@ import logging
 import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks, status, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,6 +23,9 @@ from capture_agent.config import (
     TEST_SMTP_PORT,
     PCAP_STORAGE_DIR,
     HANDSHAKE_TOKEN_TTL_SECONDS,
+    BACKEND_WS_URL,
+    WS_HEARTBEAT_INTERVAL,
+    WS_RECONNECT_MAX_DELAY,
     get_allowed_origins,
     is_origin_allowed,
     detect_loopback_interface,
@@ -41,10 +45,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger("capture_agent")
 
+
+@asynccontextmanager
+async def lifespan(app):
+    """Manage WebSocket Bridge lifecycle."""
+    from capture_agent.ws_bridge import start_ws_bridge, stop_ws_bridge
+    if BACKEND_WS_URL and CAPTURE_AGENT_SECRET_KEY:
+        logger.info(f"Starting WebSocket bridge to {BACKEND_WS_URL}...")
+        await start_ws_bridge(
+            backend_ws_url=BACKEND_WS_URL,
+            api_key=CAPTURE_AGENT_SECRET_KEY,
+            heartbeat_interval=WS_HEARTBEAT_INTERVAL,
+            reconnect_max_delay=WS_RECONNECT_MAX_DELAY,
+        )
+    elif not CAPTURE_AGENT_SECRET_KEY:
+        logger.info("WebSocket bridge disabled: CAPTURE_AGENT_SECRET_KEY not configured.")
+    else:
+        logger.info("WebSocket bridge disabled: BACKEND_WS_URL not configured.")
+    yield
+    await stop_ws_bridge()
+    logger.info("WebSocket bridge stopped.")
+
+
 app = FastAPI(
     title="SecureMailScope Capture Agent",
     description="Dedicated user-local background agent for authentic packet capture of real email traffic",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Strict Whitelist of Allowed Web Origins (NO WILDCARD)

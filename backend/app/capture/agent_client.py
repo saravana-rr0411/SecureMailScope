@@ -22,7 +22,7 @@ def get_capture_agent_url() -> str:
     return (CAPTURE_AGENT_URL or os.environ.get("CAPTURE_AGENT_URL") or "http://127.0.0.1:9000").rstrip("/")
 
 def get_capture_agent_api_key() -> str:
-    return CAPTURE_AGENT_API_KEY or os.environ.get("CAPTURE_AGENT_API_KEY", "sms-capture-secret-dev-key")
+    return (CAPTURE_AGENT_API_KEY or os.environ.get("CAPTURE_AGENT_API_KEY", "")).strip()
 
 def get_capture_agent_timeout() -> float:
     return float(os.environ.get("CAPTURE_AGENT_TIMEOUT_SECONDS", str(CAPTURE_AGENT_TIMEOUT or 30.0)))

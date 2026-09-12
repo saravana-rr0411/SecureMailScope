@@ -25,6 +25,12 @@
         <string>127.0.0.1</string>
         <key>AGENT_PORT</key>
         <string>9000</string>
+        <key>CAPTURE_AGENT_LOCAL_ONLY</key>
+        <string>true</string>
+        <key>BACKEND_WS_URL</key>
+        <string>wss://securemailscope-130k.onrender.com/ws/agent</string>
+        <key>CAPTURE_AGENT_SECRET_KEY</key>
+        <string>__AGENT_SECRET_KEY__</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

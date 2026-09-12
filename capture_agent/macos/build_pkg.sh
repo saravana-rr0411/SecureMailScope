@@ -64,11 +64,11 @@ fi
 
 "${PYTHON_BIN}" -m pip download \
     --dest "${APP_INSTALL_DIR}/wheels" \
-    fastapi uvicorn pydantic cryptography >/dev/null 2>&1 || {
+    fastapi uvicorn pydantic cryptography websockets >/dev/null 2>&1 || {
         echo "[*] Downloading wheels with output..."
         "${PYTHON_BIN}" -m pip download \
             --dest "${APP_INSTALL_DIR}/wheels" \
-            fastapi uvicorn pydantic cryptography
+            fastapi uvicorn pydantic cryptography websockets
     }
 
 # 5. Create the service launcher wrapper (bin/run_agent.sh)
@@ -90,6 +90,14 @@ export PYTHONPATH="${APP_DIR}"
 export AGENT_HOST="127.0.0.1"
 export AGENT_PORT="9000"
 export CAPTURE_AGENT_LOCAL_ONLY="true"
+export BACKEND_WS_URL="${BACKEND_WS_URL:-wss://securemailscope-130k.onrender.com/ws/agent}"
+
+# Load credentials securely from agent.env if present
+if [[ -f "${APP_DIR}/agent.env" ]]; then
+    set -a
+    source "${APP_DIR}/agent.env"
+    set +a
+fi
 
 exec "${VENV_PYTHON}" -m uvicorn capture_agent.main:app --host 127.0.0.1 --port 9000
 EOF
@@ -124,6 +132,8 @@ cat <<'EOF' > "${LAUNCHD_DIR}/com.securemailscope.captureagent.plist"
         <string>9000</string>
         <key>CAPTURE_AGENT_LOCAL_ONLY</key>
         <string>true</string>
+        <key>BACKEND_WS_URL</key>
+        <string>wss://securemailscope-130k.onrender.com/ws/agent</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

@@ -513,6 +513,27 @@ def get_dashboard_trends(
     filtered strictly by Daily or Monthly period from Supabase 'analysis_results'.
     Performs careful date/time boundary queries against timestamptz analyzed_at.
     """
+    # Validate period and provided date/month formats before database check
+    if period == "daily":
+        if date_str:
+            try:
+                datetime.date.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid date format '{date_str}'. Expected 'YYYY-MM-DD'.")
+    elif period == "monthly":
+        if month_str:
+            try:
+                parts = month_str.split("-")
+                if len(parts) != 2:
+                    raise ValueError()
+                year = int(parts[0])
+                month = int(parts[1])
+                datetime.datetime(year, month, 1)
+            except (ValueError, TypeError, IndexError):
+                raise ValueError(f"Invalid month format '{month_str}'. Expected 'YYYY-MM'.")
+    else:
+        raise ValueError(f"Invalid period '{period}'. Must be 'daily' or 'monthly'.")
+
     if not is_supabase_configured():
         return {
             "period": period,

@@ -48,13 +48,28 @@ fi
 WHEELS_DIR="${APP_DIR}/wheels"
 if [[ -d "${WHEELS_DIR}" && -n "$(ls -A "${WHEELS_DIR}" 2>/dev/null)" ]]; then
     echo "[postinstall] Installing offline bundled dependencies into virtual environment..."
-    "${VENV_DIR}/bin/pip" install --no-index --find-links="${WHEELS_DIR}" fastapi uvicorn pydantic cryptography || true
+    "${VENV_DIR}/bin/pip" install --no-index --find-links="${WHEELS_DIR}" fastapi uvicorn pydantic cryptography websockets || true
 fi
 
 # 5. Set Secure File & Directory Permissions
 echo "[postinstall] Configuring system permissions..."
+ENV_FILE="${APP_DIR}/agent.env"
+if [[ ! -f "${ENV_FILE}" ]]; then
+    touch "${ENV_FILE}"
+    AGENT_SECRET="${CAPTURE_AGENT_SECRET_KEY:-${CAPTURE_AGENT_API_KEY:-}}"
+    if [[ -z "${AGENT_SECRET}" && -f "/Users/saravanarajaram0411/CLG/SIH/SecureMailScope/.env" ]]; then
+        AGENT_SECRET=$(grep -E '^(CAPTURE_AGENT_API_KEY|CAPTURE_AGENT_SECRET_KEY)=' "/Users/saravanarajaram0411/CLG/SIH/SecureMailScope/.env" | head -n 1 | cut -d '=' -f2- | tr -d '"' | tr -d "'" || true)
+    fi
+    echo "# SecureMailScope Capture Agent Configuration" > "${ENV_FILE}"
+    echo "BACKEND_WS_URL=wss://securemailscope-130k.onrender.com/ws/agent" >> "${ENV_FILE}"
+    echo "CAPTURE_AGENT_SECRET_KEY=${AGENT_SECRET}" >> "${ENV_FILE}"
+fi
+chown root:wheel "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
 chown -R root:wheel "${APP_DIR}"
 chmod -R 755 "${APP_DIR}"
+chmod 600 "${ENV_FILE}"
 chmod +x "${APP_DIR}/bin/run_agent.sh" "${APP_DIR}/bin/uninstall.sh"
 
 chown root:wheel "${PLIST_PATH}"

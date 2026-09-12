@@ -31,30 +31,32 @@ def test_capture_status_endpoint_online():
         "version": "1.0.0",
         "can_capture": True
     }
-    with patch("app.capture.agent_client.is_capture_agent_configured", return_value=True):
-        with patch("httpx.AsyncClient.get") as mock_get:
-            mock_resp = AsyncMock()
-            mock_resp.status_code = 200
-            mock_resp.json = lambda: mock_agent_data
-            mock_get.return_value = mock_resp
+    with patch("app.capture.agent_client.get_capture_agent_url", return_value="http://127.0.0.1:9000"):
+        with patch("app.capture.agent_client.is_capture_agent_configured", return_value=True):
+            with patch("httpx.AsyncClient.get") as mock_get:
+                mock_resp = AsyncMock()
+                mock_resp.status_code = 200
+                mock_resp.json = lambda: mock_agent_data
+                mock_get.return_value = mock_resp
 
-            resp = client.get("/api/capture/status")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["configured"] is True
-            assert data["status"] == "ONLINE"
-            assert data["agent_details"]["can_capture"] is True
+                resp = client.get("/api/capture/status")
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["configured"] is True
+                assert data["status"] == "ONLINE"
+                assert data["agent_details"]["can_capture"] is True
 
 
 def test_capture_status_endpoint_offline():
     """Verify /api/capture/status reports OFFLINE when agent is unreachable."""
-    with patch("app.capture.agent_client.is_capture_agent_configured", return_value=True):
-        with patch("httpx.AsyncClient.get", side_effect=Exception("Connection refused")):
-            resp = client.get("/api/capture/status")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["configured"] is True
-            assert data["status"] == "OFFLINE"
+    with patch("app.capture.agent_client.get_capture_agent_url", return_value="http://127.0.0.1:9000"):
+        with patch("app.capture.agent_client.is_capture_agent_configured", return_value=True):
+            with patch("httpx.AsyncClient.get", side_effect=Exception("Connection refused")):
+                resp = client.get("/api/capture/status")
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["configured"] is True
+                assert data["status"] == "OFFLINE"
 
 
 def test_generate_authentic_capture_unconfigured():

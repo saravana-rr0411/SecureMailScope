@@ -87,3 +87,37 @@ def test_uninstaller_script_path_safety():
     assert "/Library/Application Support/SecureMailScope/CaptureAgent" in content
     # Ensure no dangerous generic deletions like "rm -rf /" or "rm -rf /Library"
     assert "rm -rf /" not in content.replace("/Library/Application Support/SecureMailScope/CaptureAgent", "")
+
+
+def test_installer_packages_websockets_dependency():
+    """Verify that websockets is packaged in requirements, build_pkg.sh, and postinstall."""
+    req_path = PROJECT_ROOT / "capture_agent" / "requirements.txt"
+    assert req_path.exists()
+    assert "websockets" in req_path.read_text(encoding="utf-8")
+
+    build_pkg_path = PROJECT_ROOT / "capture_agent" / "macos" / "build_pkg.sh"
+    assert build_pkg_path.exists()
+    assert "websockets" in build_pkg_path.read_text(encoding="utf-8")
+
+    postinstall_path = POSTINSTALL_SH
+    assert postinstall_path.exists()
+    assert "websockets" in postinstall_path.read_text(encoding="utf-8")
+
+
+def test_launchdaemon_receives_ws_configuration():
+    """Verify LaunchDaemon template and installer configure BACKEND_WS_URL and local-only bindings."""
+    with open(LAUNCHD_PLIST, "rb") as f:
+        data = plistlib.load(f)
+
+    env = data.get("EnvironmentVariables", {})
+    assert env.get("BACKEND_WS_URL") == "wss://securemailscope-130k.onrender.com/ws/agent"
+    assert env.get("AGENT_HOST") == "127.0.0.1"
+    assert env.get("AGENT_PORT") in (9000, "9000")
+    assert env.get("CAPTURE_AGENT_LOCAL_ONLY") in ("true", True)
+    assert "__AGENT_SECRET_KEY__" in env.get("CAPTURE_AGENT_SECRET_KEY", "")
+
+    # Check install.sh performs substitution
+    install_sh = PROJECT_ROOT / "capture_agent" / "macos" / "install.sh"
+    content = install_sh.read_text(encoding="utf-8")
+    assert "__AGENT_SECRET_KEY__" in content
+    assert "chmod 600" in content
