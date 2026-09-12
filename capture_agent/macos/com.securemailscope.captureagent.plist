@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.securemailscope.captureagent</string>
+    <key>WorkingDirectory</key>
+    <string>__APP_DIR__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_BIN__</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>capture_agent.main:app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>9000</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>__APP_DIR__</string>
+        <key>AGENT_HOST</key>
+        <string>127.0.0.1</string>
+        <key>AGENT_PORT</key>
+        <string>9000</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/securemailscope-capture-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/securemailscope-capture-agent.error.log</string>
+</dict>
+</plist>

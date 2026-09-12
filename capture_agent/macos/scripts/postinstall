@@ -1,0 +1,94 @@
+#!/bin/bash
+# ==============================================================================
+# SecureMailScope Capture Agent - macOS Package Post-Install Script
+# ==============================================================================
+
+set -e
+
+APP_DIR="/Library/Application Support/SecureMailScope/CaptureAgent"
+PLIST_PATH="/Library/LaunchDaemons/com.securemailscope.captureagent.plist"
+LOG_DIR="/var/log"
+STDOUT_LOG="${LOG_DIR}/securemailscope-capture-agent.log"
+STDERR_LOG="${LOG_DIR}/securemailscope-capture-agent.error.log"
+
+echo "[postinstall] Initializing SecureMailScope Capture Agent..."
+
+# 1. Architecture Detection (arm64 Apple Silicon vs x86_64 Intel)
+ARCH="$(uname -m)"
+echo "[postinstall] Detected architecture: ${ARCH}"
+
+# 2. Python 3 Discovery
+PYTHON_BIN=""
+if [[ "${ARCH}" == "arm64" && -x "/opt/homebrew/bin/python3" ]]; then
+    PYTHON_BIN="/opt/homebrew/bin/python3"
+elif [[ "${ARCH}" == "x86_64" && -x "/usr/local/bin/python3" ]]; then
+    PYTHON_BIN="/usr/local/bin/python3"
+elif [[ -x "/usr/bin/python3" ]]; then
+    PYTHON_BIN="/usr/bin/python3"
+fi
+
+if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
+    PYTHON_BIN="$(which python3 || true)"
+fi
+
+if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
+    echo "[postinstall] Error: Python 3 executable not found on the system." >&2
+    exit 1
+fi
+echo "[postinstall] Using base Python: ${PYTHON_BIN}"
+
+# 3. Create or Update Isolated Virtual Environment
+VENV_DIR="${APP_DIR}/venv"
+if [[ ! -d "${VENV_DIR}" || ! -x "${VENV_DIR}/bin/python" ]]; then
+    echo "[postinstall] Creating dedicated system virtual environment at ${VENV_DIR}..."
+    "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
+
+# 4. Install Dependencies from Bundled Offline Wheels
+WHEELS_DIR="${APP_DIR}/wheels"
+if [[ -d "${WHEELS_DIR}" && -n "$(ls -A "${WHEELS_DIR}" 2>/dev/null)" ]]; then
+    echo "[postinstall] Installing offline bundled dependencies into virtual environment..."
+    "${VENV_DIR}/bin/pip" install --no-index --find-links="${WHEELS_DIR}" fastapi uvicorn pydantic cryptography || true
+fi
+
+# 5. Set Secure File & Directory Permissions
+echo "[postinstall] Configuring system permissions..."
+chown -R root:wheel "${APP_DIR}"
+chmod -R 755 "${APP_DIR}"
+chmod +x "${APP_DIR}/bin/run_agent.sh" "${APP_DIR}/bin/uninstall.sh"
+
+chown root:wheel "${PLIST_PATH}"
+chmod 644 "${PLIST_PATH}"
+
+touch "${STDOUT_LOG}" "${STDERR_LOG}"
+chown root:wheel "${STDOUT_LOG}" "${STDERR_LOG}"
+chmod 640 "${STDOUT_LOG}" "${STDERR_LOG}"
+
+# 6. Load and Start Background Daemon via launchctl
+echo "[postinstall] Loading LaunchDaemon service via launchctl..."
+launchctl unload -w "${PLIST_PATH}" 2>/dev/null || true
+launchctl load -w "${PLIST_PATH}"
+
+# 7. Verify Health Check on 127.0.0.1:9000
+echo "[postinstall] Verifying agent startup on http://127.0.0.1:9000/health..."
+HEALTH_URL="http://127.0.0.1:9000/health"
+MAX_TRIES=15
+TRIES=0
+ONLINE=0
+
+while [[ $TRIES -lt $MAX_TRIES ]]; do
+    sleep 1
+    TRIES=$((TRIES + 1))
+    if curl -s -f "${HEALTH_URL}" >/dev/null 2>&1; then
+        ONLINE=1
+        break
+    fi
+done
+
+if [[ $ONLINE -eq 1 ]]; then
+    echo "[postinstall] [SUCCESS] SecureMailScope Capture Agent is running and healthy on 127.0.0.1:9000."
+else
+    echo "[postinstall] [NOTE] Service registered; warming up in background. Review ${STDERR_LOG} if needed."
+fi
+
+exit 0

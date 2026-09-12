@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
 
 export default function OverviewScreen({
@@ -8,9 +8,62 @@ export default function OverviewScreen({
   onSelectCapture,
   onNavigate,
   onTriggerUpload,
+  onGenerateAuthenticCapture,
   theme = 'light'
 }) {
   const [hoveredPoint, setHoveredPoint] = useState(null);
+  const [captureStep, setCaptureStep] = useState('ready'); // 'ready' | 'traffic' | 'capturing' | 'analyzing' | 'complete'
+
+  // Local Capture Agent connectivity state (checked live against GET http://127.0.0.1:9000/health)
+  const [agentStatus, setAgentStatus] = useState('checking'); // 'checking' | 'connected' | 'not_detected'
+  const [agentInfo, setAgentInfo] = useState(null);
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [isRetryingAgent, setIsRetryingAgent] = useState(false);
+
+  // Check GET http://127.0.0.1:9000/health with silent error handling (no stack traces or console alerts)
+  const checkAgentHealth = async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch('http://127.0.0.1:9000/health', {
+        method: 'GET',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.status === 'OK') {
+          setAgentStatus('connected');
+          setAgentInfo(data);
+          return true;
+        }
+      }
+    } catch {
+      // Offline or unreachable - silently treat as not detected
+    }
+    setAgentStatus('not_detected');
+    setAgentInfo(null);
+    return false;
+  };
+
+  // Check agent health on initial mount, on window focus, and periodically
+  useEffect(() => {
+    checkAgentHealth();
+
+    const handleFocus = () => {
+      checkAgentHealth();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    const interval = setInterval(() => {
+      checkAgentHealth();
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
+  }, []);
 
   // SINGLE SOURCE OF TRUTH: All metrics derive directly from analyzedPcaps[]
   const pcapList = Array.isArray(analyzedPcaps) && analyzedPcaps.length > 0
@@ -146,15 +199,45 @@ export default function OverviewScreen({
       {/* ==================================================================== */}
       <header className="bg-white dark:bg-slate-900 rounded-xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors duration-150">
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">analytics</span>
             <span className="text-[11px] font-bold uppercase tracking-wider text-[#006591] dark:text-sky-400">Enterprise Telemetry</span>
+            <span className="text-slate-300 dark:text-slate-600 hidden sm:inline">·</span>
+            {agentStatus === 'connected' ? (
+              <div
+                id="local-agent-status-badge"
+                title={`SecureMailScope Capture Agent v${agentInfo?.version || '1.0'} active on this computer`}
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 font-sans text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 tracking-wider uppercase transition-colors"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>Local Agent Connected</span>
+              </div>
+            ) : agentStatus === 'checking' ? (
+              <div
+                id="local-agent-status-badge"
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-sans text-[10px] font-semibold text-slate-500 dark:text-slate-400 tracking-wider uppercase transition-colors"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse"></span>
+                <span>Checking Agent...</span>
+              </div>
+            ) : (
+              <button
+                id="local-agent-status-badge"
+                type="button"
+                onClick={() => setShowAgentModal(true)}
+                title="Local capture agent is not running. Click to view setup guidance."
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 font-sans text-[10px] font-medium text-slate-500 dark:text-slate-400 tracking-wider uppercase hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                <span>Local Agent Not Detected</span>
+              </button>
+            )}
           </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Cryptographic Security Overview</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">Cross-capture cryptographic security posture and AI risk trajectory</p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
           <button
             onClick={onTriggerUpload}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 dark:bg-slate-800 text-white hover:bg-slate-800 dark:hover:bg-slate-700 active:bg-slate-950 dark:active:bg-slate-600 text-xs font-semibold shadow-xs transition-all duration-150 cursor-pointer"
@@ -162,6 +245,46 @@ export default function OverviewScreen({
             <span className="material-symbols-outlined text-[16px]">upload_file</span>
             <span>Upload PCAP</span>
           </button>
+          {onGenerateAuthenticCapture && (
+            <button
+              id="btn-generate-authentic-pcap"
+              onClick={async () => {
+                if (captureStep !== 'ready' && captureStep !== 'complete') return;
+                // If local agent is not detected, check one more time before prompting modal
+                if (agentStatus === 'not_detected') {
+                  const isOnline = await checkAgentHealth();
+                  if (!isOnline) {
+                    setShowAgentModal(true);
+                    return;
+                  }
+                }
+                try {
+                  await onGenerateAuthenticCapture(setCaptureStep);
+                  setTimeout(() => setCaptureStep('ready'), 3000);
+                } catch {
+                  setCaptureStep('ready');
+                }
+              }}
+              disabled={captureStep !== 'ready' && captureStep !== 'complete'}
+              title="Trigger dedicated Capture Agent to generate real SMTP + TLS traffic and capture genuine packets via tcpdump"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-xs transition-all duration-150 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${captureStep !== 'ready' && captureStep !== 'complete' ? 'animate-spin' : ''}`}>
+                {captureStep === 'traffic' && 'sync'}
+                {captureStep === 'capturing' && 'sensors'}
+                {captureStep === 'analyzing' && 'query_stats'}
+                {captureStep === 'complete' && 'check_circle'}
+                {(captureStep === 'ready' || (!['traffic', 'capturing', 'analyzing', 'complete'].includes(captureStep))) && 'network_check'}
+              </span>
+              <span>
+                {captureStep === 'traffic' && 'Generating Authentic Traffic...'}
+                {captureStep === 'capturing' && 'Capturing Packets...'}
+                {captureStep === 'analyzing' && 'Analyzing PCAP...'}
+                {captureStep === 'complete' && 'Capture Complete!'}
+                {captureStep === 'ready' && 'Generate Authentic PCAP'}
+              </span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -669,6 +792,121 @@ export default function OverviewScreen({
           </table>
         </div>
       </section>
+
+      {/* LOCAL CAPTURE AGENT REQUIRED GUIDANCE MODAL */}
+      {showAgentModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-modal-title"
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full p-6 flex flex-col gap-4 text-slate-800 dark:text-slate-100 animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0">
+                  <span className="material-symbols-outlined text-[24px]">sensors_off</span>
+                </div>
+                <div>
+                  <h3 id="agent-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    Local Capture Agent Required
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Authentic network packet recording requires the agent service
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAgentModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                aria-label="Close"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-3">
+              <p>
+                SecureMailScope generates genuine, non-synthetic PCAP captures by executing authentic email protocol exchanges and capturing packets directly on your computer.
+              </p>
+              <p>
+                To generate authentic captures locally, please start or install the background Capture Agent on this machine:
+              </p>
+
+              {/* Step / Command Box */}
+              <div className="bg-slate-950 text-slate-200 rounded-xl p-3.5 font-mono text-[11px] flex flex-col gap-1.5 border border-slate-800">
+                <div className="text-slate-400 text-[10px] font-sans font-semibold uppercase tracking-wider">
+                  Terminal Command (Run Locally)
+                </div>
+                <div className="text-sky-300 select-all font-semibold">
+                  cd capture_agent/macos &amp;&amp; sudo ./install.sh
+                </div>
+                <div className="text-slate-400 text-[10px] font-sans mt-0.5">
+                  Or launch manually: <span className="font-mono text-slate-300">sudo .venv/bin/python capture_agent/main.py</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 text-[11px]">
+                <span className="material-symbols-outlined text-[16px] text-sky-500 shrink-0">info</span>
+                <span>The agent runs locally on your system, captures loopback test traffic, and only accepts connections from localhost.</span>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex-wrap">
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsRetryingAgent(true);
+                  const isOnline = await checkAgentHealth();
+                  setIsRetryingAgent(false);
+                  if (isOnline) {
+                    setShowAgentModal(false);
+                  }
+                }}
+                disabled={isRetryingAgent}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#006591] hover:bg-[#005174] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-60"
+              >
+                <span className={`material-symbols-outlined text-[16px] ${isRetryingAgent ? 'animate-spin' : ''}`}>
+                  {isRetryingAgent ? 'progress_activity' : 'refresh'}
+                </span>
+                <span>{isRetryingAgent ? 'Checking...' : 'Check Connection Again'}</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                {onGenerateAuthenticCapture && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setShowAgentModal(false);
+                      try {
+                        await onGenerateAuthenticCapture(setCaptureStep);
+                        setTimeout(() => setCaptureStep('ready'), 3000);
+                      } catch {
+                        setCaptureStep('ready');
+                      }
+                    }}
+                    title="Attempt capture via backend server proxy"
+                    className="px-3 py-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    Continue via Server
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAgentModal(false)}
+                  className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

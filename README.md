@@ -145,11 +145,11 @@ The ML model consumes 54 objective session observations extracted by `extract_se
 
 ## 🚀 Running & Verification
 
-### Backend Tests
+### Automated Tests (Backend + Capture Agent)
 ```bash
-PYTHONPATH=backend .venv/bin/pytest backend/tests
+PYTHONPATH=backend:. .venv/bin/pytest backend/tests capture_agent/tests
 ```
-*Executes all 106 automated unit and integration tests covering protocol detection, STARTTLS state tracking, TLS parsing, X.509 chain cryptanalysis, deterministic rules, Isolation Forest, and the complete AI Cryptographic Risk evaluation suite.*
+*Executes all 173 automated unit and integration tests covering protocol detection, STARTTLS state tracking, TLS parsing, X.509 chain cryptanalysis, deterministic rules, Isolation Forest, AI Cryptographic Risk evaluation, and macOS installer verification.*
 
 ### Frontend Lint & Production Build
 ```bash
@@ -157,6 +157,23 @@ cd frontend
 npm run lint
 npm run build
 ```
+
+---
+
+## 📦 SecureMailScope Local Capture Agent (macOS .pkg)
+
+For live, authentic packet captures without synthetic packets or manual Scapy construction, SecureMailScope provides a native macOS Capture Agent package:
+
+- **Installer**: `dist/SecureMailScopeCaptureAgent-1.0.0.pkg`
+- **Installation**:
+  ```bash
+  sudo installer -pkg dist/SecureMailScopeCaptureAgent-1.0.0.pkg -target /
+  ```
+- **Uninstallation**:
+  ```bash
+  sudo "/Library/Application Support/SecureMailScope/CaptureAgent/bin/uninstall.sh"
+  ```
+- **Security & Scope**: Runs via native `launchd` LaunchDaemon, binds strictly to `127.0.0.1:9000`, never modifies `/dev/bpf*` permissions, and captures strictly local test traffic (`tcp and port 2525 and host 127.0.0.1`). See [capture_agent/README.md](file:///Users/saravanarajaram0411/CLG/SIH/SecureMailScope/capture_agent/README.md) for complete details.
 
 ---
 

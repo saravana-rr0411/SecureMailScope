@@ -3,6 +3,7 @@ import sys
 import platform
 import shutil
 import subprocess
+import re
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -12,8 +13,47 @@ DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
 
 # Environment configuration
 CAPTURE_AGENT_SECRET_KEY = os.environ.get("CAPTURE_AGENT_SECRET_KEY", "sms-capture-secret-dev-key")
-AGENT_HOST = os.environ.get("AGENT_HOST", "0.0.0.0")
+AGENT_HOST = os.environ.get("AGENT_HOST", "127.0.0.1")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "9000"))
+LOCAL_ONLY = os.environ.get("CAPTURE_AGENT_LOCAL_ONLY", "true").lower() in ("1", "true", "yes")
+
+# Ephemeral Handshake Token TTL (seconds)
+HANDSHAKE_TOKEN_TTL_SECONDS = int(os.environ.get("HANDSHAKE_TOKEN_TTL_SECONDS", "60"))
+
+# Strict Allowed Origins for Web Frontend CORS & Handshake (NO WILDCARD)
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://secure-mail-scope-eight.vercel.app",
+    "https://securemailscope-130k.onrender.com",
+    "https://securemailscope.onrender.com",
+]
+
+
+def get_allowed_origins() -> list[str]:
+    """Returns the strict list of allowed web origins, merging defaults with any custom environment override."""
+    extra = os.environ.get("CAPTURE_AGENT_ALLOWED_ORIGINS", "")
+    origins = list(DEFAULT_ALLOWED_ORIGINS)
+    if extra:
+        for o in extra.split(","):
+            cleaned = o.strip()
+            if cleaned and cleaned not in origins:
+                origins.append(cleaned)
+    return origins
+
+
+def is_origin_allowed(origin: Optional[str]) -> bool:
+    """Checks if an origin is authorized, allowing configured origins and official SecureMailScope vercel deployments."""
+    if not origin:
+        return False
+    if origin in get_allowed_origins():
+        return True
+    if re.match(r"^https:\/\/secure-mail-scope(?:-[a-z0-9-]+)?\.vercel\.app$", origin):
+        return True
+    return False
+
 
 TEST_SMTP_HOST = os.environ.get("TEST_SMTP_HOST", "127.0.0.1")
 TEST_SMTP_PORT = int(os.environ.get("TEST_SMTP_PORT", "2525"))
@@ -94,9 +134,10 @@ def check_capture_capabilities(interface: Optional[str] = None) -> Tuple[bool, s
     if current_os == "darwin":
         diag = (
             f"Permission denied accessing /dev/bpf* on macOS for interface '{iface}'.\n"
-            "Safest & Simplest local fix: Run once in your terminal:\n"
-            "    sudo chmod 666 /dev/bpf*\n"
-            "(This grants unprivileged user access to BPF taps without running Python as root)."
+            "Recommended fix: Install the local macOS LaunchDaemon background service:\n"
+            "    cd capture_agent/macos && sudo ./install.sh\n"
+            "Or run the agent with root privileges: sudo .venv/bin/python capture_agent/main.py\n"
+            "(Do not modify system permissions on /dev/bpf*)."
         )
         return False, diag, False
 

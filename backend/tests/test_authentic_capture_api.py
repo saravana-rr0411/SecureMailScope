@@ -46,6 +46,17 @@ def test_capture_status_endpoint_online():
             assert data["agent_details"]["can_capture"] is True
 
 
+def test_capture_status_endpoint_offline():
+    """Verify /api/capture/status reports OFFLINE when agent is unreachable."""
+    with patch("app.capture.agent_client.is_capture_agent_configured", return_value=True):
+        with patch("httpx.AsyncClient.get", side_effect=Exception("Connection refused")):
+            resp = client.get("/api/capture/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["configured"] is True
+            assert data["status"] == "OFFLINE"
+
+
 def test_generate_authentic_capture_unconfigured():
     """Verify /api/capture/generate-authentic returns 400 when agent is unconfigured."""
     with patch("app.capture.agent_client.is_capture_agent_configured", return_value=False):

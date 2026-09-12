@@ -48,7 +48,7 @@ def test_auth_invalid_token():
         headers={"Authorization": "Bearer wrong-secret-key-12345"}
     )
     assert resp.status_code == 401
-    assert "invalid capture agent authorization key" in resp.json()["detail"].lower()
+    assert "invalid or expired" in resp.json()["detail"].lower()
 
 
 def test_concurrent_capture_prevention():
@@ -145,3 +145,168 @@ def test_authentic_smtp_server_and_client_real_sockets():
     finally:
         server.stop()
         cert_material.cleanup()
+
+
+def test_cors_preflight_and_headers():
+    """Verify CORS preflight OPTIONS request returns valid access-control headers for web clients."""
+    headers = {
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type,x-requested-with"
+    }
+    resp = client.options("/api/v1/capture/generate", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "POST" in resp.headers.get("access-control-allow-methods", "")
+
+
+def test_localhost_only_enforcement():
+    """Verify localhost middleware permits local test clients."""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "OK"
+
+
+def test_health_endpoint_cors_headers_for_browser():
+    """Verify GET /health returns valid CORS headers for browser dashboard origins."""
+    headers = {"Origin": "http://localhost:5173"}
+    resp = client.get("/health", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_health_endpoint_dashboard_contract():
+    """Verify GET /health response matches frontend ExecutiveDashboard contract requirements."""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("status") == "OK"
+    assert "version" in data
+    assert isinstance(data.get("can_capture"), bool)
+    assert data.get("is_busy") is False
+
+
+def test_handshake_endpoint_success_allowed_origin():
+    """Verify POST /api/v1/auth/handshake issues an ephemeral token for allowed web origins."""
+    headers = {
+        "Origin": "http://localhost:5173",
+        "X-Requested-With": "SecureMailScope"
+    }
+    resp = client.post("/api/v1/auth/handshake", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "token" in data
+    assert len(data["token"]) >= 32
+    assert data["token_type"] == "Bearer"
+    assert data["expires_in"] == 60
+    assert data["status"] == "ready"
+
+
+def test_handshake_endpoint_rejected_disallowed_origin():
+    """Verify POST /api/v1/auth/handshake rejects untrusted origins with 403 Forbidden."""
+    headers = {
+        "Origin": "https://malicious-site.com",
+        "X-Requested-With": "SecureMailScope"
+    }
+    resp = client.post("/api/v1/auth/handshake", headers=headers)
+    assert resp.status_code == 403
+    assert "not permitted" in resp.json()["detail"].lower() or "not authorized" in resp.json()["detail"].lower()
+
+
+def test_handshake_endpoint_missing_custom_header():
+    """Verify POST /api/v1/auth/handshake rejects requests missing X-Requested-With."""
+    headers = {
+        "Origin": "http://localhost:5173"
+    }
+    resp = client.post("/api/v1/auth/handshake", headers=headers)
+    assert resp.status_code == 400
+    assert "x-requested-with" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_ephemeral_token_authentication_and_single_use_consumption():
+    """
+    Verify ephemeral handshake token grants access on first use,
+    and is IMMEDIATELY CONSUMED so replay attempts are rejected with 401.
+    """
+    from capture_agent.main import create_ephemeral_token, verify_bearer_auth
+    from fastapi import HTTPException
+
+    token = await create_ephemeral_token(ttl_seconds=60)
+    auth_header = f"Bearer {token}"
+
+    # First use: must succeed and return the token
+    result = await verify_bearer_auth(auth_header)
+    assert result == token
+
+    # Second use (replay attack): must raise 401 Unauthorized
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_bearer_auth(auth_header)
+    assert exc_info.value.status_code == 401
+    assert "invalid or expired" in exc_info.value.detail.lower()
+
+
+@pytest.mark.anyio
+async def test_ephemeral_token_expiration():
+    """Verify expired ephemeral tokens are rejected with 401 Unauthorized."""
+    import time
+    from capture_agent.main import ephemeral_tokens, tokens_lock, verify_bearer_auth
+    from fastapi import HTTPException
+
+    expired_token = "test_expired_token_abc123"
+    async with tokens_lock:
+        # Inject token that expired 10 seconds ago
+        ephemeral_tokens[expired_token] = time.time() - 10
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_bearer_auth(f"Bearer {expired_token}")
+    assert exc_info.value.status_code == 401
+    assert "invalid or expired" in exc_info.value.detail.lower()
+
+
+@pytest.mark.anyio
+async def test_server_secret_authenticated_request():
+    """Verify backend proxy / CLI server-to-server secret key remains valid."""
+    from capture_agent.main import verify_bearer_auth
+    result = await verify_bearer_auth(f"Bearer {CAPTURE_AGENT_SECRET_KEY}")
+    assert result == CAPTURE_AGENT_SECRET_KEY
+
+
+def test_dns_rebinding_protection():
+    """Verify requests with rebinded external Host headers are rejected with 403 Forbidden."""
+    headers = {"Host": "evil.attacker.com:9000"}
+    resp = client.get("/health", headers=headers)
+    assert resp.status_code == 403
+    assert "invalid host header" in resp.json()["detail"].lower()
+
+
+def test_cors_disallowed_origin():
+    """Verify browser cross-origin requests from disallowed origins are rejected with 403 Forbidden."""
+    headers = {"Origin": "https://evil.attacker.com"}
+    resp = client.get("/health", headers=headers)
+    assert resp.status_code == 403
+    assert "not permitted" in resp.json()["detail"].lower()
+
+
+def test_production_vercel_origin_and_private_network_preflight():
+    """Verify production Vercel origin and W3C Private Network Access preflight are supported."""
+    headers = {
+        "Origin": "https://secure-mail-scope-eight.vercel.app",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Private-Network": "true"
+    }
+    resp = client.options("/health", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "https://secure-mail-scope-eight.vercel.app"
+    assert resp.headers.get("access-control-allow-private-network") == "true"
+
+    # Test handshake from production Vercel origin
+    handshake_headers = {
+        "Origin": "https://secure-mail-scope-eight.vercel.app",
+        "X-Requested-With": "SecureMailScope"
+    }
+    h_resp = client.post("/api/v1/auth/handshake", headers=handshake_headers)
+    assert h_resp.status_code == 200
+    assert "token" in h_resp.json()
+
+

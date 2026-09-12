@@ -1,0 +1,20 @@
+#!/bin/bash
+# ==============================================================================
+# SecureMailScope Capture Agent - macOS Package Pre-Install Script
+# ==============================================================================
+
+set -e
+
+PLIST_PATH="/Library/LaunchDaemons/com.securemailscope.captureagent.plist"
+
+# 1. Unload existing LaunchDaemon if currently active
+if launchctl list | grep -q "com.securemailscope.captureagent"; then
+    echo "[preinstall] Unloading existing capture agent LaunchDaemon..."
+    launchctl unload -w "${PLIST_PATH}" 2>/dev/null || true
+fi
+
+# 2. Terminate any stray uvicorn capture agent process running on port 9000
+echo "[preinstall] Ensuring port 9000 is freed..."
+pkill -f "uvicorn.*capture_agent.main:app" 2>/dev/null || true
+
+exit 0

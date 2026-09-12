@@ -318,43 +318,120 @@ export default function App() {
     try {
       updateStep('traffic'); // "Generating Authentic Traffic..."
 
-      const urls = [];
-      if (API_BASE) urls.push(`${API_BASE}/api/capture/generate-authentic`);
-      urls.push("/api/capture/generate-authentic");
-      if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        urls.push("http://127.0.0.1:8000/api/capture/generate-authentic");
-      }
+      let data = null;
+      let directAgentSuccess = false;
 
-      let res = null;
-      let lastErr = null;
+      // 1. Target Architecture Path: Direct Website -> Localhost Capture Agent -> Backend Analyzer
+      try {
+        const timerCapturing = setTimeout(() => updateStep('capturing'), 500);
 
-      const timerCapturing = setTimeout(() => updateStep('capturing'), 600);
-      const timerAnalyzing = setTimeout(() => updateStep('analyzing'), 1400);
+        // 1a. Perform origin-verified handshake to acquire a single-use ephemeral session token
+        const handshakeResp = await fetch("http://127.0.0.1:9000/api/v1/auth/handshake", {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'SecureMailScope'
+          }
+        });
 
-      for (const url of urls) {
-        try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ protocol: 'SMTP', profile: 'secure_tls12' })
-          });
-          if (res.ok) break;
-          const errData = await res.json().catch(() => ({}));
-          lastErr = new Error(errData.detail || `Server returned HTTP ${res.status}`);
-        } catch (fetchErr) {
-          lastErr = fetchErr;
+        if (!handshakeResp.ok) {
+          throw new Error(`Agent handshake failed with HTTP ${handshakeResp.status}`);
         }
+
+        const handshakeData = await handshakeResp.json();
+        const ephemeralToken = handshakeData?.token;
+        if (!ephemeralToken) {
+          throw new Error("No token returned from agent handshake.");
+        }
+
+        // 1b. Request authentic packet capture using the ephemeral single-use session token
+        const agentResp = await fetch("http://127.0.0.1:9000/api/v1/capture/generate", {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${ephemeralToken}`
+          },
+          body: JSON.stringify({ protocol: 'SMTP', profile: 'secure_tls12' })
+        });
+
+        clearTimeout(timerCapturing);
+
+        if (agentResp.ok) {
+          updateStep('analyzing');
+          const pcapBlob = await agentResp.blob();
+          const filename = agentResp.headers.get("X-Capture-Filename") ||
+            `authentic_smtp_tls_${Date.now()}.pcap`;
+
+          // Forward genuine PCAP to backend analyze endpoint
+          const uploadUrls = [];
+          if (API_BASE) uploadUrls.push(`${API_BASE}/api/pcap/analyze`);
+          uploadUrls.push("/api/pcap/analyze");
+          if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+            uploadUrls.push("http://127.0.0.1:8000/api/pcap/analyze");
+          }
+
+          for (const uploadUrl of uploadUrls) {
+            try {
+              const formData = new FormData();
+              formData.append('file', pcapBlob, filename);
+              const analyzeResp = await fetch(uploadUrl, {
+                method: 'POST',
+                body: formData
+              });
+              if (analyzeResp.ok) {
+                data = await analyzeResp.json();
+                directAgentSuccess = true;
+                break;
+              }
+            } catch (forwardErr) {
+              console.warn(`Forward to ${uploadUrl} failed:`, forwardErr);
+            }
+          }
+        }
+      } catch (localErr) {
+        console.info("Local Capture Agent direct connection skipped/failed, falling back to backend proxy:", localErr);
       }
 
-      clearTimeout(timerCapturing);
-      clearTimeout(timerAnalyzing);
+      // 2. Fallback Path: Website -> Backend Proxy (/api/capture/generate-authentic)
+      if (!directAgentSuccess || !data) {
+        const urls = [];
+        if (API_BASE) urls.push(`${API_BASE}/api/capture/generate-authentic`);
+        urls.push("/api/capture/generate-authentic");
+        if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+          urls.push("http://127.0.0.1:8000/api/capture/generate-authentic");
+        }
 
-      if (!res || !res.ok) {
-        throw lastErr || new Error("Failed to generate authentic PCAP from Capture Agent.");
+        let res = null;
+        let lastErr = null;
+
+        const timerCapturing = setTimeout(() => updateStep('capturing'), 600);
+        const timerAnalyzing = setTimeout(() => updateStep('analyzing'), 1400);
+
+        for (const url of urls) {
+          try {
+            res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ protocol: 'SMTP', profile: 'secure_tls12' })
+            });
+            if (res.ok) break;
+            const errData = await res.json().catch(() => ({}));
+            lastErr = new Error(errData.detail || `Server returned HTTP ${res.status}`);
+          } catch (fetchErr) {
+            lastErr = fetchErr;
+          }
+        }
+
+        clearTimeout(timerCapturing);
+        clearTimeout(timerAnalyzing);
+
+        if (!res || !res.ok) {
+          throw lastErr || new Error("Failed to generate authentic PCAP from Capture Agent.");
+        }
+
+        updateStep('analyzing');
+        data = await res.json();
       }
-
-      updateStep('analyzing');
-      const data = await res.json();
       const captureId = data.capture_id || data.id || data.filename || `pcap_${Date.now()}`;
       const analyzedAt = data.analyzed_at || new Date().toISOString();
 
@@ -549,7 +626,6 @@ export default function App() {
               onSelectCapture={handleSelectCapture}
               onNavigate={setActiveTab}
               onTriggerUpload={triggerUpload}
-              onGenerateAuthenticCapture={handleGenerateAuthenticCapture}
               theme={theme}
             />
           )}
@@ -563,6 +639,7 @@ export default function App() {
               onSelectCapture={handleSelectCapture}
               onNavigate={setActiveTab}
               onTriggerUpload={triggerUpload}
+              onGenerateAuthenticCapture={handleGenerateAuthenticCapture}
               theme={theme}
             />
           )}

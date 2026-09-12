@@ -1,23 +1,29 @@
 import os
 import hmac
 import time
+import secrets
 import asyncio
 import logging
 import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, Header, HTTPException, BackgroundTasks, status
+from fastapi import FastAPI, Header, HTTPException, BackgroundTasks, status, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from capture_agent.config import (
     CAPTURE_AGENT_SECRET_KEY,
     AGENT_HOST,
     AGENT_PORT,
+    LOCAL_ONLY,
     TEST_SMTP_HOST,
     TEST_SMTP_PORT,
     PCAP_STORAGE_DIR,
+    HANDSHAKE_TOKEN_TTL_SECONDS,
+    get_allowed_origins,
+    is_origin_allowed,
     detect_loopback_interface,
     get_tcpdump_binary,
     check_capture_capabilities,
@@ -37,12 +43,115 @@ logger = logging.getLogger("capture_agent")
 
 app = FastAPI(
     title="SecureMailScope Capture Agent",
-    description="Dedicated agent service for authentic packet capture of real email traffic",
+    description="Dedicated user-local background agent for authentic packet capture of real email traffic",
     version="1.0.0"
 )
 
+# Strict Whitelist of Allowed Web Origins (NO WILDCARD)
+ALLOWED_ORIGINS = get_allowed_origins()
+
+# Enable CORS strictly for authorized SecureMailScope frontend origins and support Private Network Access (PNA)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https:\/\/secure-mail-scope(?:-[a-z0-9-]+)?\.vercel\.app$",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    allow_private_network=True,
+    expose_headers=[
+        "X-Capture-Filename",
+        "X-Capture-Source",
+        "X-Capture-Protocol",
+        "Content-Disposition"
+    ]
+)
+
+
+@app.middleware("http")
+async def enforce_localhost_and_origin(request: Request, call_next):
+    """
+    Security Middleware:
+    1. Localhost IP Enforcement: Rejects connections not originating from loopback.
+    2. DNS Rebinding Protection: Validates that the Host header is localhost/127.0.0.1.
+    3. Origin Whitelist Enforcement: For browser cross-origin requests, strictly enforces
+       the SecureMailScope origin whitelist.
+    """
+    # 1. Localhost Client IP enforcement
+    if LOCAL_ONLY:
+        client_host = request.client.host if request.client else ""
+        if client_host and client_host not in ("127.0.0.1", "::1", "localhost", "testclient", "testserver"):
+            logger.warning(f"Rejected non-local connection attempt from client IP: {client_host}")
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "Forbidden: Capture Agent only accepts connections originating from localhost."}
+            )
+
+    # 2. Host Header Validation (DNS Rebinding protection)
+    raw_host = request.headers.get("host", "").split(":")[0].lower()
+    if raw_host and raw_host not in ("127.0.0.1", "localhost", "::1", "testclient", "testserver"):
+        logger.warning(f"Rejected request with unauthorized Host header (DNS rebinding attempt): {raw_host}")
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Forbidden: Invalid Host header."}
+        )
+
+    # 3. Origin Whitelist Validation for browser requests
+    origin = request.headers.get("origin")
+    if origin and not is_origin_allowed(origin):
+        logger.warning(f"Rejected request from disallowed Origin: {origin}")
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": f"Forbidden: Cross-origin access from '{origin}' is not permitted."}
+        )
+
+    return await call_next(request)
+
+
 # Global mutex ensuring only one capture runs at a time
 capture_lock = asyncio.Lock()
+
+# Ephemeral handshake token storage: token -> expiration_timestamp (float)
+ephemeral_tokens: Dict[str, float] = {}
+tokens_lock = asyncio.Lock()
+
+
+async def create_ephemeral_token(ttl_seconds: int = HANDSHAKE_TOKEN_TTL_SECONDS) -> str:
+    """Generates a cryptographically strong, single-use ephemeral token with TTL."""
+    async with tokens_lock:
+        now = time.time()
+        # Prune expired tokens
+        expired = [t for t, exp in ephemeral_tokens.items() if exp < now]
+        for t in expired:
+            ephemeral_tokens.pop(t, None)
+
+        token = secrets.token_urlsafe(32)
+        ephemeral_tokens[token] = now + ttl_seconds
+        return token
+
+
+async def consume_ephemeral_token(token: str) -> bool:
+    """
+    Verifies and immediately consumes (pops) an ephemeral token.
+    Returns True if the token was valid, unexpired, and successfully consumed.
+    Returns False otherwise. Single-use consumption guarantees replay protection.
+    """
+    async with tokens_lock:
+        now = time.time()
+        if token in ephemeral_tokens:
+            exp = ephemeral_tokens.pop(token)
+            if exp >= now:
+                return True
+            logger.warning("Attempted use of expired ephemeral capture token.")
+            return False
+        return False
+
+
+class HandshakeResponse(BaseModel):
+    token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    status: str = "ready"
 
 
 class CaptureRequest(BaseModel):
@@ -51,23 +160,79 @@ class CaptureRequest(BaseModel):
     timeout_seconds: float = 15.0
 
 
-def verify_bearer_auth(authorization: Optional[str] = Header(None)):
-    """Verifies incoming Bearer authorization token using constant-time comparison."""
+@app.post("/api/v1/auth/handshake", response_model=HandshakeResponse)
+async def auth_handshake(request: Request):
+    """
+    Secure Localhost Handshake Endpoint:
+    1. Validates that request originated from an authorized SecureMailScope Origin.
+    2. Validates custom 'X-Requested-With: SecureMailScope' header.
+    3. Issues a cryptographically random, 60s single-use ephemeral token.
+    Zero shared secrets or long-lived keys are exposed to the client bundle.
+    """
+    origin = request.headers.get("origin")
+    if not origin or not is_origin_allowed(origin):
+        logger.warning(f"Handshake rejected: missing or unauthorized Origin: {origin}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Origin '{origin}' is not authorized to interact with this Capture Agent."
+        )
+
+    requested_with = request.headers.get("x-requested-with")
+    if requested_with != "SecureMailScope":
+        logger.warning("Handshake rejected: missing or invalid X-Requested-With header.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bad Request: Missing or invalid 'X-Requested-With: SecureMailScope' header."
+        )
+
+    token = await create_ephemeral_token(HANDSHAKE_TOKEN_TTL_SECONDS)
+    logger.info(f"Issued ephemeral handshake token for origin: {origin}")
+    return {
+        "token": token,
+        "token_type": "Bearer",
+        "expires_in": HANDSHAKE_TOKEN_TTL_SECONDS,
+        "status": "ready"
+    }
+
+
+async def verify_bearer_auth(authorization: Optional[str] = Header(None)) -> str:
+    """
+    Verifies incoming Bearer authorization using dual-authentication:
+    1. Ephemeral Single-Use Token: Issued via /api/v1/auth/handshake (used by Web Frontend).
+       Immediately consumed upon verification (replay protection).
+    2. Server-to-Server Secret Key: Configured in backend environment via CAPTURE_AGENT_SECRET_KEY
+       (used by Backend Proxy, automated Pytest, CLI tools).
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or malformed Authorization header. Expected: Bearer <secret>"
+            detail="Missing or malformed Authorization header. Expected: Bearer <token>"
         )
 
     provided_token = authorization.split("Bearer ", 1)[1].strip()
-    expected_token = CAPTURE_AGENT_SECRET_KEY.strip()
-
-    if not hmac.compare_digest(provided_token.encode("utf-8"), expected_token.encode("utf-8")):
-        logger.warning("Rejected unauthorized request to Capture Agent.")
+    if not provided_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid capture agent authorization key"
+            detail="Empty Bearer token provided."
         )
+
+    # Check 1: Try consuming as an ephemeral single-use session token
+    is_valid_ephemeral = await consume_ephemeral_token(provided_token)
+    if is_valid_ephemeral:
+        logger.info("Authenticated request via valid ephemeral handshake token.")
+        return provided_token
+
+    # Check 2: Try verifying against server secret key (constant-time comparison)
+    expected_secret = CAPTURE_AGENT_SECRET_KEY.strip()
+    if expected_secret and hmac.compare_digest(provided_token.encode("utf-8"), expected_secret.encode("utf-8")):
+        logger.info("Authenticated request via server secret key.")
+        return provided_token
+
+    logger.warning("Rejected unauthorized request to Capture Agent.")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired capture agent authorization token."
+    )
 
 
 def cleanup_file_safely(file_path: str):
@@ -106,7 +271,7 @@ async def generate_authentic_capture(
 ):
     """
     Executes an authentic packet capture of real email traffic:
-    1. Authenticates request via Bearer token
+    1. Authenticates request via Bearer token (ephemeral handshake token or server secret)
     2. Generates real X.509 certificate
     3. Starts tcpdump packet sniffer on controlled interface and test port
     4. Launches authentic SMTP server with TLS 1.2
@@ -114,7 +279,7 @@ async def generate_authentic_capture(
     6. Stops tcpdump and verifies the generated PCAP
     7. Streams raw PCAP binary to caller
     """
-    verify_bearer_auth(authorization)
+    await verify_bearer_auth(authorization)
 
     # Check if a capture is already in progress
     if capture_lock.locked():
