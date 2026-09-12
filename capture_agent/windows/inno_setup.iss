@@ -61,7 +61,9 @@ Filename: "{code:GetPythonExe}"; Parameters: """{app}\capture_agent\windows\serv
 // Helper function to resolve Python executable in {app}\venv, {app}\python.exe, or system PATH
 function GetPythonExe(Param: String): String;
 begin
-  if FileExists(ExpandConstant('{app}\venv\Scripts\python.exe')) then
+  if FileExists(ExpandConstant('{app}\python\python.exe')) then
+    Result := ExpandConstant('{app}\python\python.exe')
+  else if FileExists(ExpandConstant('{app}\venv\Scripts\python.exe')) then
     Result := ExpandConstant('{app}\venv\Scripts\python.exe')
   else if FileExists(ExpandConstant('{app}\python.exe')) then
     Result := ExpandConstant('{app}\python.exe')
@@ -170,6 +172,15 @@ begin
   Result := Exec('python.exe', '--version', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
 end;
 
+function HasBundledPython(): Boolean;
+begin
+  #if FileExists("..\..\build\windows_payload\python\python.exe") || FileExists("..\..\build\windows_payload\venv\Scripts\python.exe")
+    Result := True;
+  #else
+    Result := False;
+  #endif
+end;
+
 // Pre-installation check
 function InitializeSetup(): Boolean;
 begin
@@ -185,7 +196,7 @@ begin
     Result := 'Npcap packet capture driver is required to install SecureMailScope Capture Agent.';
     Exit;
   end;
-  if not IsPythonRuntimeAvailable() then
+  if not HasBundledPython() and not IsPythonRuntimeAvailable() then
   begin
     Result := 'Python runtime was not detected. Please install Python 3.10+ from https://www.python.org/downloads/ (ensure "Add python.exe to PATH" is checked), then run Setup again.';
     Exit;

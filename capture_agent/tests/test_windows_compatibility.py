@@ -213,9 +213,9 @@ def test_build_installer_script_validation():
     assert "packet_capturer.py" in content
     assert "service.py" in content
 
-    # Virtual environment bundling
-    assert "python -m venv" in content
+    # Python runtime and dependency staging
     assert "requirements.txt" in content
+    assert "pip install" in content
 
     # SHA-256 hash verification
     assert "certutil -hashfile" in content
