@@ -1,10 +1,10 @@
 ; ==============================================================================
 ; SecureMailScope Capture Agent - Inno Setup Script for Windows
-; Target: SecureMailScopeCaptureAgent-1.0.0-Setup.exe
+; Target: SecureMailScopeCaptureAgent-1.0.1-Setup.exe
 ; ==============================================================================
 
 #define MyAppName "SecureMailScope Capture Agent"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "SecureMailScope"
 #define MyAppURL "https://github.com/saravana-rr0411/SecureMailScope"
 #define MyAppExeName "service.exe"
@@ -21,7 +21,7 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\SecureMailScope\CaptureAgent
 DefaultGroupName=SecureMailScope
 DisableProgramGroupPage=yes
-OutputBaseFilename=SecureMailScopeCaptureAgent-1.0.0-Setup
+OutputBaseFilename=SecureMailScopeCaptureAgent-1.0.1-Setup
 OutputDir=..\..\dist
 Compression=lzma2/max
 SolidCompression=yes

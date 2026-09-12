@@ -318,42 +318,83 @@ async def agent_status_endpoint(request: Request, client_os: Optional[str] = Que
 
 
 GITHUB_RELEASE_DOWNLOAD_BASE = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download"
+WINDOWS_INSTALLER_FILENAME = "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+MACOS_INSTALLER_FILENAME = "SecureMailScopeCaptureAgent-1.0.0.pkg"
 
 
 @app.get("/api/agent/download/{platform_name}")
-def download_agent_package(platform_name: str):
+async def download_agent_package(platform_name: str):
     """
     Serves the prebuilt Capture Agent installer package for Windows or macOS.
-    Serves local file from dist/ if present; otherwise seamlessly redirects to the
-    official GitHub Release download asset.
+    Serves local file from dist/ if present; otherwise fetches/streams the official
+    release artifact directly to the client with caching, ensuring end users download
+    the executable directly from the SecureMailScope website without visiting GitHub.
     """
     from pathlib import Path
     target = platform_name.lower().strip()
     dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
 
     if target in ("win", "windows", "exe"):
-        exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
-        if exe_path.exists():
+        filename = WINDOWS_INSTALLER_FILENAME
+        exe_path = dist_dir / filename
+        if exe_path.exists() and exe_path.stat().st_size > 1000:
             return FileResponse(
                 path=str(exe_path),
                 media_type="application/vnd.microsoft.portable-executable",
-                filename="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+                filename=filename,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
             )
+
+        remote_url = os.environ.get(
+            "WINDOWS_AGENT_INSTALLER_URL",
+            f"{GITHUB_RELEASE_DOWNLOAD_BASE}/{filename}"
+        )
+
+        # Attempt to stream the binary from remote release/storage directly to the client
+        # and cache it in dist/, so the user downloads the .exe directly without ever
+        # having to navigate to GitHub.
+        if os.environ.get("STREAM_AGENT_INSTALLER", "1").lower() in ("1", "true", "yes"):
+            try:
+                import httpx
+                async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=10.0)) as http_client:
+                    async with http_client.stream("GET", remote_url) as stream_resp:
+                        if stream_resp.status_code == 200:
+                            dist_dir.mkdir(parents=True, exist_ok=True)
+                            temp_path = dist_dir / f"{filename}.tmp"
+                            with open(temp_path, "wb") as f:
+                                async for chunk in stream_resp.aiter_bytes(chunk_size=65536):
+                                    f.write(chunk)
+                            if temp_path.stat().st_size > 1000:
+                                temp_path.replace(exe_path)
+                                return FileResponse(
+                                    path=str(exe_path),
+                                    media_type="application/vnd.microsoft.portable-executable",
+                                    filename=filename,
+                                    headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+                                )
+                            else:
+                                if temp_path.exists():
+                                    temp_path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Could not stream Windows installer from {remote_url}: {e}")
+
         return RedirectResponse(
-            url=f"{GITHUB_RELEASE_DOWNLOAD_BASE}/SecureMailScopeCaptureAgent-1.0.0-Setup.exe",
+            url=remote_url,
             status_code=307
         )
 
     if target in ("mac", "macos", "darwin", "pkg"):
-        pkg_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.0.pkg"
+        filename = MACOS_INSTALLER_FILENAME
+        pkg_path = dist_dir / filename
         if pkg_path.exists():
             return FileResponse(
                 path=str(pkg_path),
                 media_type="application/octet-stream",
-                filename="SecureMailScopeCaptureAgent-1.0.0.pkg"
+                filename=filename,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
             )
         return RedirectResponse(
-            url=f"{GITHUB_RELEASE_DOWNLOAD_BASE}/SecureMailScopeCaptureAgent-1.0.0.pkg",
+            url=f"{GITHUB_RELEASE_DOWNLOAD_BASE}/{filename}",
             status_code=307
         )
 

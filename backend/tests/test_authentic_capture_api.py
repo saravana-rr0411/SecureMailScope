@@ -201,12 +201,85 @@ def test_download_agent_package_endpoints():
     assert "application/octet-stream" in resp_mac.headers["content-type"]
     assert "SecureMailScopeCaptureAgent-1.0.0.pkg" in resp_mac.headers["content-disposition"]
 
-    # Windows package redirects to official GitHub Release asset or serves file if present in dist/
+    # Windows package serves directly if present, streams from remote, or redirects
     resp_win = client.get("/api/agent/download/windows", follow_redirects=False)
     assert resp_win.status_code in (200, 307)
-    if resp_win.status_code == 307:
-        assert "SecureMailScopeCaptureAgent-1.0.0-Setup.exe" in resp_win.headers["location"]
+    if resp_win.status_code == 200:
+        assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in resp_win.headers.get("content-disposition", "")
+    elif resp_win.status_code == 307:
+        assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in resp_win.headers.get("location", "")
 
     # Invalid platform returns 400
     resp_invalid = client.get("/api/agent/download/solaris")
     assert resp_invalid.status_code == 400
+
+
+def test_download_windows_agent_local_serving():
+    """Verify Windows installer is served directly as attachment when present in dist/."""
+    from pathlib import Path
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
+    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+    created = False
+    try:
+        if not exe_path.exists():
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            exe_path.write_bytes(b"MZ" + b"\x00" * 2000)
+            created = True
+
+        resp = client.get("/api/agent/download/windows")
+        assert resp.status_code == 200
+        assert "application/vnd.microsoft.portable-executable" in resp.headers["content-type"]
+        assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"' in resp.headers["content-disposition"]
+        assert len(resp.content) >= 2002
+    finally:
+        if created and exe_path.exists():
+            exe_path.unlink(missing_ok=True)
+
+
+def test_download_windows_agent_streaming_cache():
+    """Verify backend streams from remote release URL and caches to dist/ when not present locally."""
+    from pathlib import Path
+    import unittest.mock as mock
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
+    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+
+    backed_up = None
+    if exe_path.exists():
+        backed_up = exe_path.read_bytes()
+        exe_path.unlink()
+
+    fake_payload = b"MZ\x90\x00" + b"X" * 5000
+
+    class MockStreamResponse:
+        status_code = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+        async def aiter_bytes(self, chunk_size=65536):
+            yield fake_payload
+
+    class MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def stream(self, method, url):
+            return MockStreamResponse()
+
+    try:
+        with mock.patch("httpx.AsyncClient", MockAsyncClient):
+            resp = client.get("/api/agent/download/windows")
+            assert resp.status_code == 200
+            assert "application/vnd.microsoft.portable-executable" in resp.headers["content-type"]
+            assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"' in resp.headers["content-disposition"]
+            assert resp.content == fake_payload
+            assert exe_path.exists()
+            assert exe_path.read_bytes() == fake_payload
+    finally:
+        if backed_up is not None:
+            exe_path.write_bytes(backed_up)
+        elif exe_path.exists():
+            exe_path.unlink(missing_ok=True)

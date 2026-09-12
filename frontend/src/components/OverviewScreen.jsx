@@ -469,7 +469,7 @@ export default function OverviewScreen({
           <div className="flex items-center gap-2 shrink-0">
             <a
               href={getAgentDownloadUrl(clientOS)}
-              download={clientOS === 'windows' ? 'SecureMailScopeCaptureAgent-1.0.0-Setup.exe' : 'SecureMailScopeCaptureAgent-1.0.0.pkg'}
+              download={clientOS === 'windows' ? 'SecureMailScopeCaptureAgent-1.0.1-Setup.exe' : 'SecureMailScopeCaptureAgent-1.0.0.pkg'}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
             >
               <span className="material-symbols-outlined text-[15px]">download</span>
@@ -533,7 +533,7 @@ export default function OverviewScreen({
                 <a
                   id="btn-download-windows-agent"
                   href={getAgentDownloadUrl('windows')}
-                  download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+                  download="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
                   title="Download SecureMailScope Capture Agent for Windows (.exe)"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
                 >
@@ -1260,7 +1260,7 @@ export default function OverviewScreen({
                     </span>
                     <a
                       href={getAgentDownloadUrl('windows')}
-                      download="SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+                      download="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#006591] hover:bg-[#005174] text-white font-semibold text-[11px] shadow-2xs transition-all cursor-pointer"
                     >
                       <span className="material-symbols-outlined text-[14px]">download</span>
@@ -1268,7 +1268,7 @@ export default function OverviewScreen({
                     </a>
                   </div>
                   <p className="text-[11px] text-sky-900/90 dark:text-sky-300/90 leading-relaxed">
-                    Run <span className="font-mono font-semibold">SecureMailScopeCaptureAgent-1.0.0-Setup.exe</span> once. It installs to <span className="font-mono text-[10px]">C:\Program Files\SecureMailScope\CaptureAgent</span>, registers the <span className="font-mono text-[10px]">SecureMailScopeCaptureAgent</span> Windows Service, and starts capture automatically.
+                    Run <span className="font-mono font-semibold">SecureMailScopeCaptureAgent-1.0.1-Setup.exe</span> once. It installs to <span className="font-mono text-[10px]">C:\Program Files\SecureMailScope\CaptureAgent</span>, registers the <span className="font-mono text-[10px]">SecureMailScopeCaptureAgent</span> Windows Service, and starts capture automatically.
                   </p>
                 </div>
 

@@ -13,10 +13,10 @@ name: Build Windows Capture Agent Installer
         type: boolean
         default: false
       release_tag:
-        description: 'GitHub Release tag to publish asset to (e.g. v1.0.0)'
+        description: 'GitHub Release tag to publish asset to (e.g. v1.0.1)'
         required: false
         type: string
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -60,7 +60,7 @@ jobs:
       - name: Validate Generated Installer Binary
         shell: bash
         run: |
-          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
 
           if [ ! -f "$INSTALLER_PATH" ]; then
             echo "::error::Installer binary not found at $INSTALLER_PATH"
@@ -86,8 +86,8 @@ jobs:
       - name: Upload Installer as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SecureMailScopeCaptureAgent-1.0.0-Setup
-          path: dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe
+          name: SecureMailScopeCaptureAgent-1.0.1-Setup
+          path: dist/SecureMailScopeCaptureAgent-1.0.1-Setup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -96,9 +96,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release_tag || 'v1.0.0' }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || 'v1.0.1' }}
         run: |
-          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe"
+          INSTALLER_PATH="dist/SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
           echo "Publishing $INSTALLER_PATH to release '${RELEASE_TAG}'..."
 
           if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
@@ -111,4 +111,4 @@ jobs:
             gh release upload "${RELEASE_TAG}" "$INSTALLER_PATH" --clobber
           fi
 
-          echo "[SUCCESS] Published SecureMailScopeCaptureAgent-1.0.0-Setup.exe to GitHub Release '${RELEASE_TAG}'."
+          echo "[SUCCESS] Published SecureMailScopeCaptureAgent-1.0.1-Setup.exe to GitHub Release '${RELEASE_TAG}'."

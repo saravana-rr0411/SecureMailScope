@@ -3,7 +3,7 @@
 This directory contains the Windows packaging and installation resources for the **SecureMailScope Capture Agent**, producing the standalone installer:
 
 ```
-dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe
+dist/SecureMailScopeCaptureAgent-1.0.1-Setup.exe
 ```
 
 ---
@@ -33,7 +33,7 @@ dist/SecureMailScopeCaptureAgent-1.0.0-Setup.exe
 - To remain 100% compliant with Npcap's legal terms, SecureMailScope **does NOT** bundle unlicensed third-party Npcap binaries in public releases and **never** performs automatic arbitrary internet binary downloads.
 
 ### Installer Handling
-The installer (`SecureMailScopeCaptureAgent-1.0.0-Setup.exe`) implements safe, dual-mode prerequisite handling:
+The installer (`SecureMailScopeCaptureAgent-1.0.1-Setup.exe`) implements safe, dual-mode prerequisite handling:
 
 1. **When Npcap is Already Installed (e.g. via Wireshark or prior setup)**:
    - The installer detects `wpcap.dll` in `System32` / `SysWOW64` or the running `npcap` driver service.
@@ -70,7 +70,7 @@ The script will:
 2. Verify all core SecureMailScope source files exist.
 3. Check for optional `vendor\npcap-setup.exe` and verify its SHA-256 hash.
 4. Stage files into `build\windows_payload\`.
-5. Compile `inno_setup.iss` into `dist\SecureMailScopeCaptureAgent-1.0.0-Setup.exe`.
+5. Compile `inno_setup.iss` into `dist\SecureMailScopeCaptureAgent-1.0.1-Setup.exe`.
 6. Fail closed if any step fails.
 
 ---
