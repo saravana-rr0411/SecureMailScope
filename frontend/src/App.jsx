@@ -320,6 +320,7 @@ export default function App() {
       protocol: 'SMTP',
       profile: 'gmail',
       port: 587,
+      ports: [587, 465],
       target_host: 'smtp.gmail.com',
       duration_seconds: options.duration_seconds || 40
     } : {
@@ -329,7 +330,7 @@ export default function App() {
 
     try {
       if (isGmail) {
-        updateStep('listening'); // "Capture started. Send your Gmail email through Outlook now."
+        updateStep('listening'); // "Capture started. Send an email using your configured desktop mail client now."
       } else {
         updateStep('traffic'); // "Generating Authentic Traffic..."
       }
@@ -486,9 +487,10 @@ export default function App() {
       } else if (
         msg.toLowerCase().includes('contains no packets') ||
         msg.toLowerCase().includes('no smtp submission packets') ||
+        msg.toLowerCase().includes('no gmail smtp submission traffic') ||
         msg.toLowerCase().includes('empty or invalid pcap')
       ) {
-        setError("No SMTP submission packets detected on TCP port 587 during the capture window. Verify Outlook is configured to send Gmail SMTP through port 587.");
+        setError("No Gmail SMTP submission traffic detected during the capture window. Send an email using your configured desktop mail client while capture is active.");
       } else {
         setError(msg || "Failed to generate authentic PCAP.");
       }
@@ -503,6 +505,7 @@ export default function App() {
       profile: 'gmail',
       protocol: 'SMTP',
       port: 587,
+      ports: [587, 465],
       target_host: 'smtp.gmail.com',
       duration_seconds: 40
     });

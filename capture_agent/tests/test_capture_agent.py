@@ -129,6 +129,10 @@ def test_packet_capturer_bpf_filter_generation():
     f4 = build_bpf_filter(ports=[2525, 587])
     assert f4 == "tcp and ((port 2525 and host 127.0.0.1) or port 587)"
 
+    # 4b. Dual submission ports [587, 465] (Gmail submission)
+    f4b = build_bpf_filter(ports=[587, 465])
+    assert f4b == "tcp and (port 587 or port 465)"
+
     # 5. Non-standard port with host
     f5 = build_bpf_filter(port=1025, host="127.0.0.1")
     assert f5 == "tcp and port 1025 and host 127.0.0.1"
@@ -149,10 +153,16 @@ def test_packet_capturer_interface_selection():
     lo = get_capture_interface([2525])
     assert lo in ("lo0", "lo", "127.0.0.1")
 
-    # Port 587 should use active interface
+    # Ports 587 and 465 should use active interface
     active_iface = get_capture_interface([587])
     assert active_iface is not None
     assert len(active_iface) > 0
+
+    active_iface_465 = get_capture_interface([465])
+    assert active_iface_465 == active_iface
+
+    active_iface_dual = get_capture_interface([587, 465])
+    assert active_iface_dual == active_iface
 
 
 def test_get_capture_ports_configuration():
@@ -164,7 +174,7 @@ def test_get_capture_ports_configuration():
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("CAPTURE_PORTS", None)
         default_ports = get_capture_ports()
-        assert default_ports == [2525, 587]
+        assert default_ports == [2525, 587, 465]
 
 
 def test_authentic_smtp_server_and_client_real_sockets():
@@ -447,9 +457,31 @@ def test_gmail_mode_does_not_start_local_smtp_server():
         assert not mock_server.called
         assert not mock_cert.called
 
-        # Verify capturer targeted port 587
+        # Verify capturer targeted ports
         assert len(created_capturers) > 0
-        assert created_capturers[-1].port == 587
+        assert set(created_capturers[-1].ports) == {587, 465}
+
+
+def test_gmail_mode_empty_capture_error_message():
+    """Verify empty Gmail capture produces the updated generic desktop mail client error message."""
+    with patch.object(PacketCapturer, "start"), \
+         patch.object(PacketCapturer, "stop"):
+
+        resp = client.post(
+            "/api/v1/capture/generate",
+            json={
+                "protocol": "SMTP",
+                "profile": "gmail",
+                "duration_seconds": 0.01
+            },
+            headers={"Authorization": f"Bearer {CAPTURE_AGENT_SECRET_KEY}"}
+        )
+
+        assert resp.status_code == 400
+        detail = resp.json().get("detail", "")
+        assert "No Gmail SMTP submission traffic detected during the capture window." in detail
+        assert "Outlook" not in detail
+        assert "Send an email using your configured desktop mail client while capture is active." in detail
 
 
 def test_port_2525_profile_remains_unchanged():

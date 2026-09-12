@@ -123,3 +123,32 @@ def test_unsupported_protocol_starttls():
     res = assess_starttls("UNKNOWN", messages)
     assert res["status"] == "NOT_OBSERVABLE"
     assert res["upgrade_supported"] is None
+
+
+def test_assess_starttls_port_465_implicit_tls():
+    """Verify assess_starttls identifies port 465 as implicit TLS."""
+    messages = [
+        ("c2s", b"\x16\x03\x03\x00\x50\x01\x00\x00\x4c\x03\x03"),
+        ("s2c", b"\x16\x03\x03\x00\x50\x02\x00\x00\x4c\x03\x03")
+    ]
+    res = assess_starttls("SMTP", messages, port=465)
+    assert res["status"] == "DIRECT_TLS"
+    assert res["transport_mode"] == "IMPLICIT_TLS"
+    assert res["submission_type"] == "implicit TLS SMTP"
+    assert res["tls_transition_observed"] is True
+
+
+def test_assess_starttls_port_587_starttls():
+    """Verify assess_starttls identifies port 587 as explicit STARTTLS."""
+    messages = [
+        ("s2c", b"220 mail.example.com ESMTP\r\n"),
+        ("c2s", b"EHLO client.example.com\r\n"),
+        ("s2c", b"250-mail.example.com\r\n250-STARTTLS\r\n250 OK\r\n"),
+        ("c2s", b"STARTTLS\r\n"),
+        ("s2c", b"220 Ready to start TLS\r\n"),
+        ("c2s", b"\x16\x03\x03\x00\x45\x01\x00\x00\x41\x03\x03")
+    ]
+    res = assess_starttls("SMTP", messages, port=587)
+    assert res["status"] == "SECURE_TRANSITION"
+    assert res["transport_mode"] == "STARTTLS"
+    assert res["submission_type"] == "SMTP STARTTLS"

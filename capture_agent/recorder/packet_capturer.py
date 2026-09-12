@@ -60,11 +60,21 @@ def build_bpf_filter(
             return "tcp and port 2525 and host 127.0.0.1"
         return f"tcp and port {p}"
 
-    # 5. Dual port: 2525 (local controlled test server) + 587 (Gmail SMTP submission)
+    # 5. Dual port: 587 + 465 (Gmail SMTP submission ports)
+    if set(resolved_ports) == {587, 465}:
+        if host:
+            return f"tcp and (port 587 or port 465) and host {host}"
+        return "tcp and (port 587 or port 465)"
+
+    # 6. Dual port: 2525 (local controlled test server) + 587 (Gmail SMTP submission)
     if set(resolved_ports) == {2525, 587}:
         return "tcp and ((port 2525 and host 127.0.0.1) or port 587)"
 
-    # 6. Multiple arbitrary ports
+    # 7. Triple port: 2525 (local) + 587 + 465 (submission)
+    if set(resolved_ports) == {2525, 587, 465}:
+        return "tcp and ((port 2525 and host 127.0.0.1) or port 587 or port 465)"
+
+    # 8. Multiple arbitrary ports
     ports_clause = " or ".join(f"port {p}" for p in resolved_ports)
     return f"tcp and ({ports_clause})"
 
@@ -336,7 +346,7 @@ if __name__ == "__main__":
     print(f"[*] BPF Filter       : {capturer.build_bpf_filter()}")
     print(f"[*] Output PCAP      : {capturer.output_pcap_path}")
     print(f"[*] Duration         : {args.duration}s")
-    print(f"[*] Starting live capture... Trigger Outlook / send email now!")
+    print(f"[*] Starting live capture... Send your email via your desktop mail client now!")
     print("=" * 65)
 
     capturer.start()

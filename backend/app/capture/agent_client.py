@@ -71,6 +71,7 @@ async def request_authentic_pcap(
     protocol: str = "SMTP",
     profile: str = "secure_tls12",
     port: Optional[int] = None,
+    ports: Optional[list[int]] = None,
     target_host: Optional[str] = None,
     duration_seconds: Optional[float] = None,
     interface: Optional[str] = None,
@@ -104,6 +105,8 @@ async def request_authentic_pcap(
     }
     if port is not None:
         payload["port"] = port
+    if ports is not None:
+        payload["ports"] = ports
     if target_host is not None:
         payload["target_host"] = target_host
     if duration_seconds is not None:

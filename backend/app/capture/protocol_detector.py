@@ -103,6 +103,7 @@ def detect_flow_protocol(
 
     protocol = "UNKNOWN"
     confidence = "LOW"
+    sub_type = "UNKNOWN"
     final_evidence: List[Dict[str, Any]] = []
 
     # Check payload evidence with priority
@@ -111,15 +112,27 @@ def detect_flow_protocol(
         confidence = "HIGH"
         if matched_ports["SMTP"]:
             port_val = list(matched_ports["SMTP"])[0]
+            if port_val == 465:
+                sub_type = "implicit TLS SMTP"
+                port_desc = "Standard SMTP over implicit TLS submission port (465)"
+            elif port_val == 587:
+                sub_type = "SMTP STARTTLS"
+                port_desc = "Standard SMTP submission port (587) with STARTTLS"
+            else:
+                sub_type = "SMTP"
+                port_desc = f"Standard SMTP port ({port_val})"
             final_evidence.append({
                 "type": "port",
                 "value": port_val,
-                "description": f"Standard SMTP port ({port_val})"
+                "description": port_desc
             })
+        else:
+            sub_type = "SMTP"
         final_evidence.extend(smtp_ev)
 
     elif imap_ev and len(imap_ev) >= len(pop3_ev):
         protocol = "IMAP"
+        sub_type = "IMAP"
         confidence = "HIGH"
         if matched_ports["IMAP"]:
             port_val = list(matched_ports["IMAP"])[0]
@@ -132,6 +145,7 @@ def detect_flow_protocol(
 
     elif pop3_ev:
         protocol = "POP3"
+        sub_type = "POP3"
         confidence = "HIGH"
         if matched_ports["POP3"]:
             port_val = list(matched_ports["POP3"])[0]
@@ -147,14 +161,24 @@ def detect_flow_protocol(
         protocol = "SMTP"
         confidence = "MEDIUM"
         port_val = list(matched_ports["SMTP"])[0]
+        if port_val == 465:
+            sub_type = "implicit TLS SMTP"
+            port_desc = "Standard SMTP over implicit TLS submission port (465)"
+        elif port_val == 587:
+            sub_type = "SMTP STARTTLS"
+            port_desc = "Standard SMTP submission port (587) with STARTTLS"
+        else:
+            sub_type = "SMTP"
+            port_desc = f"Traffic detected on standard SMTP port ({port_val}) with no explicit protocol payload"
         final_evidence.append({
             "type": "port",
             "value": port_val,
-            "description": f"Traffic detected on standard SMTP port ({port_val}) with no explicit protocol payload"
+            "description": port_desc
         })
 
     elif matched_ports["IMAP"]:
         protocol = "IMAP"
+        sub_type = "IMAP"
         confidence = "MEDIUM"
         port_val = list(matched_ports["IMAP"])[0]
         final_evidence.append({
@@ -165,6 +189,7 @@ def detect_flow_protocol(
 
     elif matched_ports["POP3"]:
         protocol = "POP3"
+        sub_type = "POP3"
         confidence = "MEDIUM"
         port_val = list(matched_ports["POP3"])[0]
         final_evidence.append({
@@ -175,6 +200,7 @@ def detect_flow_protocol(
 
     else:
         protocol = "UNKNOWN"
+        sub_type = "UNKNOWN"
         confidence = "LOW"
         final_evidence.append({
             "type": "info",
@@ -195,6 +221,7 @@ def detect_flow_protocol(
 
     return {
         "protocol": protocol,
+        "submission_type": sub_type,
         "confidence": confidence,
         "detection_method": "APPLICATION_DATA" if confidence == "HIGH" else ("PORT_INFERRED" if confidence == "MEDIUM" else "UNKNOWN"),
         "source_ip": c_ip,

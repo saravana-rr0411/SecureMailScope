@@ -15,7 +15,7 @@ import time
 import uuid
 import hmac
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
 from fastapi import WebSocket, WebSocketDisconnect, status
@@ -208,13 +208,14 @@ class AgentHub:
         protocol: str = "SMTP",
         profile: str = "secure_tls12",
         port: Optional[int] = None,
+        ports: Optional[List[int]] = None,
         target_host: Optional[str] = None,
         duration_seconds: Optional[float] = None,
         interface: Optional[str] = None,
     ) -> PendingCapture:
         """
         Dispatches a capture request to an available agent.
-        Supports both local test captures (2525) and real external captures (e.g. Gmail 587).
+        Supports both local test captures (2525) and real external captures (e.g. Gmail 587/465).
         Returns a PendingCapture whose result_event will be set when complete.
         """
         # Find an available (not busy, not stale) agent
@@ -251,6 +252,8 @@ class AgentHub:
         }
         if port is not None:
             msg_payload["port"] = port
+        if ports is not None:
+            msg_payload["ports"] = ports
         if target_host is not None:
             msg_payload["target_host"] = target_host
         if duration_seconds is not None:

@@ -78,9 +78,8 @@ def get_current_os() -> str:
 
 
 # Mail capture ports configuration
-# 2525: Controlled local authentic SMTP test server
-# 587: Standard submission SMTP (RFC 6409) used by Gmail (smtp.gmail.com:587) and Outlook
-DEFAULT_CAPTURE_PORTS = [2525, 587]
+# 587 / 465: Standard submission SMTP used by Gmail (smtp.gmail.com) and desktop mail clients
+DEFAULT_CAPTURE_PORTS = [2525, 587, 465]
 
 
 def get_capture_ports() -> list[int]:
@@ -243,7 +242,7 @@ def get_capture_interface(ports: Optional[list[int]] = None) -> str:
     explicit = os.environ.get("CAPTURE_INTERFACE")
     if explicit:
         return explicit
-    if ports and 587 in ports and 2525 not in ports:
+    if ports and (587 in ports or 465 in ports) and 2525 not in ports:
         return detect_active_interface()
     return detect_loopback_interface()
 

@@ -95,6 +95,7 @@ def test_bpf_filter_generation_for_windows():
     assert build_bpf_filter(port=587) == "tcp and port 587"
     assert build_bpf_filter(port=2525) == "tcp and port 2525 and host 127.0.0.1"
     assert build_bpf_filter(port=587, host="smtp.gmail.com") == "tcp and port 587 and host smtp.gmail.com"
+    assert build_bpf_filter(ports=[587, 465]) == "tcp and (port 587 or port 465)"
 
 
 def test_packet_capturer_dispatches_to_windows_sniffer_on_windows():

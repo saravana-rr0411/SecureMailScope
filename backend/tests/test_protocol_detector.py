@@ -137,3 +137,30 @@ def test_detect_from_packets_grouping():
     assert protocols[0]["protocol"] == "SMTP"
     assert protocols[0]["confidence"] == "HIGH"
     assert protocols[0]["destination_port"] == 25
+
+
+def test_distinguish_port_587_and_465_submission_modes():
+    """Verify analysis distinguishes port 587 (SMTP STARTTLS) and port 465 (implicit TLS SMTP)."""
+    # Port 587
+    res_587 = detect_flow_protocol(
+        source_ip="192.168.1.100",
+        source_port=52000,
+        destination_ip="142.250.185.109",
+        destination_port=587,
+        payloads=[]
+    )
+    assert res_587["protocol"] == "SMTP"
+    assert res_587["submission_type"] == "SMTP STARTTLS"
+    assert any("587" in str(e) and "STARTTLS" in str(e) for e in res_587["evidence"])
+
+    # Port 465
+    res_465 = detect_flow_protocol(
+        source_ip="192.168.1.100",
+        source_port=52001,
+        destination_ip="142.250.185.109",
+        destination_port=465,
+        payloads=[]
+    )
+    assert res_465["protocol"] == "SMTP"
+    assert res_465["submission_type"] == "implicit TLS SMTP"
+    assert any("465" in str(e) and "implicit TLS" in str(e) for e in res_465["evidence"])

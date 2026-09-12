@@ -148,7 +148,8 @@ def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
         # 6. Evaluate STARTTLS negotiation and validation
         starttls_assessment = assess_starttls(
             protocol=protocol_info["protocol"],
-            ordered_messages=ordered_messages
+            ordered_messages=ordered_messages,
+            port=server_port
         )
 
         # 7. Parse TLS Handshake and extract cryptographic parameters
@@ -156,9 +157,16 @@ def reconstruct_tcp_sessions(packets: List[Any]) -> List[Dict[str, Any]]:
             ordered_messages=ordered_messages
         )
 
+        submission_type = (
+            "implicit TLS SMTP" if server_port == 465 or client_port == 465 else
+            ("SMTP STARTTLS" if server_port == 587 or client_port == 587 else
+            protocol_info.get("submission_type", protocol_info["protocol"]))
+        )
+
         session_dict = {
             "session_id": session_id,
             "protocol": protocol_info["protocol"],
+            "submission_type": submission_type,
             "protocol_confidence": protocol_info["confidence"],
             "protocol_detection_method": protocol_info.get("detection_method", "UNKNOWN"),
             "source_ip": client_ip,

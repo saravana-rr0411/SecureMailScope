@@ -6,7 +6,7 @@ import asyncio
 import logging
 import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks, status, Request
@@ -191,6 +191,7 @@ class CaptureRequest(BaseModel):
     profile: str = "secure_tls12"
     timeout_seconds: float = 15.0
     port: Optional[int] = None
+    ports: Optional[List[int]] = None
     interface: Optional[str] = None
     target_host: Optional[str] = None
     duration_seconds: Optional[float] = None
@@ -326,8 +327,9 @@ async def generate_authentic_capture(
 
     async with capture_lock:
         is_gmail_mode = (
-            request.port == 587 or
-            (request.profile and request.profile.lower() in ("gmail", "submission", "port_587")) or
+            request.port in (587, 465) or
+            (request.ports and any(p in (587, 465) for p in request.ports)) or
+            (request.profile and request.profile.lower() in ("gmail", "submission", "port_587", "port_465")) or
             (request.protocol and request.protocol.upper() in ("GMAIL", "SUBMISSION"))
         )
         timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -348,15 +350,16 @@ async def generate_authentic_capture(
             logger.info(f"Starting authentic {request.protocol} capture sequence (profile={request.profile}, port={request.port})...")
 
             if is_gmail_mode:
-                # Live external Gmail / mail submission capture mode (e.g. from Outlook / Mail client)
+                # Live external Gmail / mail submission capture mode (e.g. from desktop mail client)
+                gmail_ports = request.ports or ([request.port] if request.port in (587, 465) else [587, 465])
                 capturer = PacketCapturer(
                     output_pcap_path=output_pcap_path,
-                    port=587,
-                    interface=request.interface or get_capture_interface([587]),
+                    ports=gmail_ports,
+                    interface=request.interface or get_capture_interface(gmail_ports),
                     host=request.target_host
                 )
                 duration = request.duration_seconds or request.timeout_seconds or 40.0
-                logger.info(f"Capturing live Gmail SMTP submission traffic on port 587 ({capturer.interface}) for {duration}s...")
+                logger.info(f"Capturing live Gmail SMTP submission traffic on {capturer.bpf_filter} ({capturer.interface}) for {duration}s...")
                 capturer.start(settle_delay=0.2)
                 await asyncio.sleep(duration)
                 capturer.stop()
@@ -365,7 +368,7 @@ async def generate_authentic_capture(
                 if not pcap_path.exists() or pcap_path.stat().st_size <= 24:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="No SMTP submission packets detected on TCP port 587 during the capture window. Please send your email via Outlook while the capture is active."
+                        detail="No Gmail SMTP submission traffic detected during the capture window. Send an email using your configured desktop mail client while capture is active."
                     )
             else:
                 # 1. Generate real X.509 certificate

@@ -415,18 +415,21 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
     duration_seconds = None
     interface = None
 
+    ports = None
     if payload:
         protocol = payload.get("protocol", "SMTP")
         profile = payload.get("profile", "secure_tls12")
         port = payload.get("port")
+        ports = payload.get("ports")
         target_host = payload.get("target_host")
         duration_seconds = payload.get("duration_seconds")
         interface = payload.get("interface")
 
-    if (profile and profile.lower() in ("gmail", "submission")) or port == 587:
+    if (profile and profile.lower() in ("gmail", "submission")) or port in (587, 465) or (ports and any(p in (587, 465) for p in ports)):
         profile = "gmail"
         protocol = "SMTP"
-        port = 587
+        port = port or 587
+        ports = ports or [587, 465]
         target_host = target_host or "smtp.gmail.com"
         duration_seconds = float(duration_seconds or 40.0)
 
@@ -437,11 +440,12 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
         # Path 1: Try WebSocket Bridge (agent connected outbound to this backend)
         if agent_hub.is_agent_online():
             try:
-                logger.info(f"Attempting capture via WebSocket Bridge (profile={profile}, port={port})...")
+                logger.info(f"Attempting capture via WebSocket Bridge (profile={profile}, port={port}, ports={ports})...")
                 pending = await agent_hub.request_capture(
                     protocol=protocol,
                     profile=profile,
                     port=port,
+                    ports=ports,
                     target_host=target_host,
                     duration_seconds=duration_seconds,
                     interface=interface,
@@ -460,8 +464,12 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
             except Exception as ws_err:
                 logger.error(f"WebSocket Bridge capture failed on agent: {ws_err}")
                 # Do not fallback to 127.0.0.1 on Render server; raise the real error
+                is_sub_err = (
+                    "No SMTP submission packets" in str(ws_err) or
+                    "No Gmail SMTP submission traffic" in str(ws_err)
+                )
                 raise HTTPException(
-                    status_code=400 if "No SMTP submission packets" in str(ws_err) else 500,
+                    status_code=400 if is_sub_err else 500,
                     detail=f"Capture Agent error: {str(ws_err)}"
                 )
 
@@ -471,6 +479,7 @@ async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] 
                 protocol=protocol,
                 profile=profile,
                 port=port,
+                ports=ports,
                 target_host=target_host,
                 duration_seconds=duration_seconds,
                 interface=interface,

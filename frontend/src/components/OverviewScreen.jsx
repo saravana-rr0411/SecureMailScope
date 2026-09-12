@@ -412,7 +412,7 @@ export default function OverviewScreen({
                 }
               }}
               disabled={gmailCaptureStep !== 'ready' && gmailCaptureStep !== 'complete'}
-              title="Start live TCP port 587 capture on active network interface (en0) and send real email via Outlook"
+              title="Start live TCP ports 587 / 465 capture on active network interface and send email via your configured desktop mail client"
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#ea4335] hover:bg-[#d93025] active:bg-[#c5221f] text-white text-xs font-semibold shadow-xs transition-all duration-150 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
             >
               <span className={`material-symbols-outlined text-[16px] ${gmailCaptureStep !== 'ready' && gmailCaptureStep !== 'complete' ? 'animate-spin' : ''}`}>
@@ -422,7 +422,7 @@ export default function OverviewScreen({
                 {(gmailCaptureStep === 'ready' || (!['listening', 'analyzing', 'complete'].includes(gmailCaptureStep))) && 'mail'}
               </span>
               <span>
-                {gmailCaptureStep === 'listening' && `Listening on port 587 (${gmailCountdown}s)...`}
+                {gmailCaptureStep === 'listening' && `Listening on ports 587 / 465 (${gmailCountdown}s)...`}
                 {gmailCaptureStep === 'analyzing' && 'Analyzing Gmail Traffic...'}
                 {gmailCaptureStep === 'complete' && 'Gmail PCAP Complete!'}
                 {gmailCaptureStep === 'ready' && 'Capture Real Gmail SMTP'}
@@ -576,10 +576,10 @@ export default function OverviewScreen({
             </span>
             <div>
               <p className="text-xs font-bold text-red-950 dark:text-red-200">
-                Capture started. Send your Gmail email through Outlook now.
+                Capture started. Send an email using your configured desktop mail client now.
               </p>
               <p className="text-[11px] text-red-700 dark:text-red-300">
-                tcpdump is actively filtering port 587 (en0) for outbound TLS traffic to smtp.gmail.com
+                Actively filtering TCP ports 587 and 465 for outbound Gmail SMTP submission traffic.
               </p>
             </div>
           </div>

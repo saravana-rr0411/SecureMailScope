@@ -29,12 +29,30 @@ def decode_lines(payload: bytes) -> List[str]:
 
 def assess_starttls(
     protocol: str,
-    ordered_messages: List[Tuple[str, bytes]]
+    ordered_messages: List[Tuple[str, bytes]],
+    port: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Evaluates STARTTLS / STLS negotiation sequence across chronological session messages.
     ordered_messages is a list of tuples: ("c2s" | "s2c", raw_payload_bytes).
     """
+    if protocol == "SMTP" and port == 465:
+        has_tls = any(has_tls_handshake_header(raw_bytes) for _, raw_bytes in ordered_messages if raw_bytes)
+        return {
+            "upgrade_supported": None,
+            "upgrade_requested": False,
+            "upgrade_accepted": None,
+            "tls_transition_observed": has_tls,
+            "status": "DIRECT_TLS",
+            "transport_mode": "IMPLICIT_TLS",
+            "submission_type": "implicit TLS SMTP",
+            "evidence": [{
+                "type": "transport",
+                "value": "port 465",
+                "description": "SMTP over implicit TLS (port 465); direct TLS encryption without STARTTLS negotiation"
+            }]
+        }
+
     upgrade_supported: Optional[bool] = None
     upgrade_requested: bool = False
     upgrade_accepted: Optional[bool] = None
@@ -267,7 +285,7 @@ def assess_starttls(
         if any("250" in e.get("value", "") for e in evidence if e["type"] == "capability"):
             upgrade_supported = False
 
-    return {
+    res = {
         "upgrade_supported": upgrade_supported,
         "upgrade_requested": upgrade_requested,
         "upgrade_accepted": upgrade_accepted,
@@ -275,3 +293,11 @@ def assess_starttls(
         "status": status,
         "evidence": evidence
     }
+    if protocol == "SMTP":
+        if port == 587:
+            res["transport_mode"] = "STARTTLS"
+            res["submission_type"] = "SMTP STARTTLS"
+        elif port == 465:
+            res["transport_mode"] = "IMPLICIT_TLS"
+            res["submission_type"] = "implicit TLS SMTP"
+    return res

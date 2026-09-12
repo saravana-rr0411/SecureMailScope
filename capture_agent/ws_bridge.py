@@ -220,9 +220,12 @@ class WebSocketBridge:
                 target_host = req_data.get("target_host")
                 duration_seconds = req_data.get("duration_seconds")
 
+                target_ports = req_data.get("ports")
+
                 is_gmail_mode = (
-                    target_port == 587 or
-                    (profile and profile.lower() in ("gmail", "submission", "port_587")) or
+                    target_port in (587, 465) or
+                    (target_ports and any(p in (587, 465) for p in target_ports)) or
+                    (profile and profile.lower() in ("gmail", "submission", "port_587", "port_465")) or
                     (protocol and protocol.upper() in ("GMAIL", "SUBMISSION"))
                 )
 
@@ -242,15 +245,16 @@ class WebSocketBridge:
 
                 try:
                     if is_gmail_mode:
-                        # Live external Gmail / mail submission capture mode (e.g. from Outlook / Mail client)
+                        # Live external Gmail / mail submission capture mode (e.g. from desktop mail client)
+                        gmail_ports = target_ports or ([target_port] if target_port in (587, 465) else [587, 465])
                         capturer = PacketCapturer(
                             output_pcap_path=output_pcap_path,
-                            port=587,
-                            interface=interface or get_capture_interface([587]),
+                            ports=gmail_ports,
+                            interface=interface or get_capture_interface(gmail_ports),
                             host=target_host
                         )
                         duration = duration_seconds or 40.0
-                        logger.info(f"WS Bridge: Capturing live Gmail SMTP submission traffic on port 587 ({capturer.interface}) for {duration}s...")
+                        logger.info(f"WS Bridge: Capturing live Gmail SMTP submission traffic on {capturer.bpf_filter} ({capturer.interface}) for {duration}s...")
                         capturer.start(settle_delay=0.2)
                         await asyncio.sleep(duration)
                         capturer.stop()
@@ -314,7 +318,7 @@ class WebSocketBridge:
                 pcap_path = Path(output_pcap_path)
                 if not pcap_path.exists() or pcap_path.stat().st_size <= 24:
                     err_msg = (
-                        "No SMTP submission packets detected on TCP port 587 during the capture window. Please ensure your email is sent through Outlook while capture is active."
+                        "No Gmail SMTP submission traffic detected during the capture window. Send an email using your configured desktop mail client while capture is active."
                         if is_gmail_mode else
                         "Capture produced empty or invalid PCAP file."
                     )
