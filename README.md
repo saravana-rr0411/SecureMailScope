@@ -2,6 +2,14 @@
 
 **SecureMailScope** is a passive email network traffic analysis and forensic inspection platform. It reassembles TCP sessions from PCAP/PCAPNG network packet captures, inspects mail protocols (SMTP, IMAP, POP3), tracks STARTTLS handshake state transitions, parses TLS record layers and X.509 certificate chains, and evaluates security risk using a multi-layered, explainable forensic engine.
 
+cd /Users/saravanarajaram0411/CLG/SIH/SecureMailScope
+source .venv/bin/activate
+export PYTHONPATH=backend
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+cd /Users/saravanarajaram0411/CLG/SIH/SecureMailScope/frontend
+npm run dev
+
 ---
 
 ## 🏛 Architecture & Security Engines Separation

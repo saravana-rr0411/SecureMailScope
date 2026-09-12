@@ -18,6 +18,11 @@ from app.storage.repository import (
     get_available_periods,
     get_dashboard_trends,
 )
+from app.capture.agent_client import (
+    request_authentic_pcap,
+    get_capture_agent_status,
+    is_capture_agent_configured,
+)
 
 logger = logging.getLogger("securemailscope")
 
@@ -246,6 +251,63 @@ def get_dashboard_trends_endpoint(
     except Exception as e:
         logger.error(f"Failed to fetch dashboard trends from Supabase: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve dashboard trends: {str(e)}")
+
+
+@app.get("/api/capture/status")
+async def capture_status_endpoint():
+    """Returns status, configuration state, and readiness of the Authentic Capture Agent."""
+    return await get_capture_agent_status()
+
+
+@app.post("/api/capture/generate-authentic")
+async def generate_authentic_capture_endpoint(payload: Optional[Dict[str, Any]] = Body(None)):
+    """
+    Triggers an authentic live network packet capture via the dedicated Capture Agent,
+    streams the genuine PCAP binary, executes the existing forensic analysis pipeline,
+    persists the analysis in Supabase, and returns the result to the frontend.
+    """
+    protocol = "SMTP"
+    profile = "secure_tls12"
+    if payload:
+        protocol = payload.get("protocol", "SMTP")
+        profile = payload.get("profile", "secure_tls12")
+
+    tmp_path = None
+    try:
+        tmp_path, filename = await request_authentic_pcap(protocol=protocol, profile=profile)
+
+        # Process through the existing analyze_pcap forensic pipeline
+        result = analyze_pcap(tmp_path)
+
+        result["filename"] = filename
+        result["capture_id"] = f"pcap_{filename}"
+        result["analyzed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        result["capture_source"] = "AUTHENTIC_AUTO_CAPTURE"
+
+        # Persist into Supabase persistent storage
+        if is_supabase_configured():
+            try:
+                save_analysis_result(result)
+                logger.info(f"Authentic capture analysis persisted to Supabase: {result['capture_id']}")
+            except Exception as storage_err:
+                logger.warning(f"Supabase storage warning during authentic capture: {storage_err}")
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to generate authentic capture: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate authentic capture: {str(e)}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 

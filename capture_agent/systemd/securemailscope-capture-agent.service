@@ -1,0 +1,24 @@
+[Unit]
+Description=SecureMailScope Authentic Capture Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=captureagent
+Group=captureagent
+WorkingDirectory=/opt/securemailscope
+Environment="PATH=/opt/securemailscope/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/opt/securemailscope"
+EnvironmentFile=/etc/securemailscope/capture-agent.env
+ExecStart=/opt/securemailscope/.venv/bin/python -m uvicorn capture_agent.main:app --host 0.0.0.0 --port 9000
+Restart=always
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

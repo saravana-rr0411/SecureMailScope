@@ -11,6 +11,7 @@ export default function ExecutiveDashboard({
   onSelectCapture,
   onNavigate,
   onTriggerUpload,
+  onGenerateAuthenticCapture,
   theme = 'light'
 }) {
   const displayPcaps = Array.isArray(analyzedPcaps) ? analyzedPcaps : [];
@@ -20,6 +21,7 @@ export default function ExecutiveDashboard({
   const [openReportMenuPcap, setOpenReportMenuPcap] = useState(null);
   const [generatingPcapFilename, setGeneratingPcapFilename] = useState(null);
   const [exportFeedback, setExportFeedback] = useState(null);
+  const [captureStep, setCaptureStep] = useState('ready'); // 'ready' | 'traffic' | 'capturing' | 'analyzing' | 'complete'
   const reportMenuRef = useRef(null);
 
   // Synchronously derive dates and months from displayPcaps (database records passed from App.jsx)
@@ -486,7 +488,39 @@ export default function ExecutiveDashboard({
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Executive Security Dashboard</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">Fleet-wide session security posture, chronological risk trajectory, and analyzed capture history</p>
         </div>
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          {onGenerateAuthenticCapture && (
+            <button
+              id="btn-generate-authentic-pcap"
+              onClick={async () => {
+                if (captureStep !== 'ready' && captureStep !== 'complete') return;
+                try {
+                  await onGenerateAuthenticCapture(setCaptureStep);
+                  setTimeout(() => setCaptureStep('ready'), 3000);
+                } catch {
+                  setCaptureStep('ready');
+                }
+              }}
+              disabled={captureStep !== 'ready' && captureStep !== 'complete'}
+              title="Trigger dedicated Capture Agent to generate real SMTP + TLS traffic and capture genuine packets via tcpdump"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#006591] hover:bg-[#005174] active:bg-[#003d57] text-white text-xs font-semibold shadow-2xs transition-all duration-150 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${captureStep !== 'ready' && captureStep !== 'complete' ? 'animate-spin' : ''}`}>
+                {captureStep === 'traffic' && 'sync'}
+                {captureStep === 'capturing' && 'sensors'}
+                {captureStep === 'analyzing' && 'query_stats'}
+                {captureStep === 'complete' && 'check_circle'}
+                {(captureStep === 'ready' || (!['traffic', 'capturing', 'analyzing', 'complete'].includes(captureStep))) && 'network_check'}
+              </span>
+              <span>
+                {captureStep === 'traffic' && 'Generating Authentic Traffic...'}
+                {captureStep === 'capturing' && 'Capturing Packets...'}
+                {captureStep === 'analyzing' && 'Analyzing PCAP...'}
+                {captureStep === 'complete' && 'Capture Complete!'}
+                {captureStep === 'ready' && 'Generate Authentic PCAP'}
+              </span>
+            </button>
+          )}
           {onTriggerUpload && (
             <button
               onClick={onTriggerUpload}

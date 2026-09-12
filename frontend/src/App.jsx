@@ -307,6 +307,108 @@ export default function App() {
     }
   };
 
+  const handleGenerateAuthenticCapture = async (onStepChange) => {
+    setIsAnalyzing(true);
+    setError(null);
+
+    const updateStep = (step) => {
+      if (typeof onStepChange === 'function') onStepChange(step);
+    };
+
+    try {
+      updateStep('traffic'); // "Generating Authentic Traffic..."
+
+      const urls = [];
+      if (API_BASE) urls.push(`${API_BASE}/api/capture/generate-authentic`);
+      urls.push("/api/capture/generate-authentic");
+      if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+        urls.push("http://127.0.0.1:8000/api/capture/generate-authentic");
+      }
+
+      let res = null;
+      let lastErr = null;
+
+      const timerCapturing = setTimeout(() => updateStep('capturing'), 600);
+      const timerAnalyzing = setTimeout(() => updateStep('analyzing'), 1400);
+
+      for (const url of urls) {
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ protocol: 'SMTP', profile: 'secure_tls12' })
+          });
+          if (res.ok) break;
+          const errData = await res.json().catch(() => ({}));
+          lastErr = new Error(errData.detail || `Server returned HTTP ${res.status}`);
+        } catch (fetchErr) {
+          lastErr = fetchErr;
+        }
+      }
+
+      clearTimeout(timerCapturing);
+      clearTimeout(timerAnalyzing);
+
+      if (!res || !res.ok) {
+        throw lastErr || new Error("Failed to generate authentic PCAP from Capture Agent.");
+      }
+
+      updateStep('analyzing');
+      const data = await res.json();
+      const captureId = data.capture_id || data.id || data.filename || `pcap_${Date.now()}`;
+      const analyzedAt = data.analyzed_at || new Date().toISOString();
+
+      const newCapture = {
+        ...data,
+        capture_id: captureId,
+        analyzed_at: analyzedAt
+      };
+
+      setAnalyzedPcaps((prev) => {
+        const filtered = prev.filter((p) => {
+          const pId = p.capture_id || p.id;
+          const pName = (p.filename || '').toLowerCase();
+          const newName = (newCapture.filename || '').toLowerCase();
+          if (pId && captureId && pId === captureId) return false;
+          if (pName && newName && pName === newName) return false;
+          return true;
+        });
+        const updatedList = [newCapture, ...filtered];
+        try {
+          localStorage.setItem('sms_analyzed_pcaps', JSON.stringify(updatedList));
+        } catch (err) {
+          console.warn("Storage quota exceeded saving analyzed PCAPs:", err);
+        }
+        return updatedList;
+      });
+
+      setCurrentCaptureId(captureId);
+      try {
+        localStorage.setItem('sms_current_capture_id', captureId);
+        localStorage.setItem('sms_current_capture', JSON.stringify(newCapture));
+      } catch {}
+
+      updateStep('complete');
+      showToast(`Authentic PCAP captured & analyzed: ${newCapture.filename} (${newCapture.sessions?.length || 0} sessions)`);
+      return newCapture;
+    } catch (err) {
+      updateStep('ready');
+      const msg = err?.message || '';
+      if (
+        msg.toLowerCase().includes('load failed') ||
+        msg.toLowerCase().includes('failed to fetch') ||
+        msg.toLowerCase().includes('networkerror')
+      ) {
+        setError("Failed to connect to SecureMailScope backend. Please verify that the backend server is running.");
+      } else {
+        setError(msg || "Failed to generate authentic PCAP.");
+      }
+      throw err;
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleExport = (type) => {
     if (!currentCapture) {
       setError("No analysis data available to export.");
@@ -447,6 +549,7 @@ export default function App() {
               onSelectCapture={handleSelectCapture}
               onNavigate={setActiveTab}
               onTriggerUpload={triggerUpload}
+              onGenerateAuthenticCapture={handleGenerateAuthenticCapture}
               theme={theme}
             />
           )}
