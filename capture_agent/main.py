@@ -31,7 +31,9 @@ from capture_agent.config import (
     detect_loopback_interface,
     get_tcpdump_binary,
     check_capture_capabilities,
-    get_current_os
+    get_current_os,
+    get_capture_interface,
+    detect_active_interface
 )
 from capture_agent.certs.cert_manager import generate_test_certificate
 from capture_agent.traffic.smtp_server import AuthenticSmtpServer
@@ -188,6 +190,10 @@ class CaptureRequest(BaseModel):
     protocol: str = "SMTP"
     profile: str = "secure_tls12"
     timeout_seconds: float = 15.0
+    port: Optional[int] = None
+    interface: Optional[str] = None
+    target_host: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 @app.post("/api/v1/auth/handshake", response_model=HandshakeResponse)
@@ -332,50 +338,70 @@ async def generate_authentic_capture(
         try:
             logger.info(f"Starting authentic {request.protocol} capture sequence...")
 
-            # 1. Generate real X.509 certificate
-            cert_material = generate_test_certificate(
-                common_name="mail.securemailscope.test",
-                validity_days=365,
-                key_size=2048
+            is_gmail_mode = (
+                request.port == 587 or
+                (request.profile and request.profile.lower() in ("gmail", "submission", "port_587")) or
+                (request.protocol and request.protocol.upper() in ("GMAIL", "SUBMISSION"))
             )
 
-            # 2. Initialize & Start Real SMTP Server (must be listening before tcpdump starts)
-            server = AuthenticSmtpServer(
-                host=TEST_SMTP_HOST,
-                port=TEST_SMTP_PORT,
-                cert_path=cert_material.cert_path,
-                key_path=cert_material.key_path
-            )
-            server.start()
-            logger.info(f"Authentic SMTP Server listening on {TEST_SMTP_HOST}:{server.actual_port}")
-
-            # 3. Initialize & Start Packet Capturer (ensures tcpdump is listening before client connects)
-            capturer = PacketCapturer(
-                output_pcap_path=output_pcap_path,
-                port=server.actual_port
-            )
-            capturer.start(settle_delay=0.2)
-
-            # 4. Execute Real SMTP Client in a thread pool to avoid blocking the async event loop
-            def run_client_task():
-                client = AuthenticSmtpClient(
-                    host=TEST_SMTP_HOST,
-                    port=server.actual_port,
-                    local_hostname="client.securemailscope.test",
-                    timeout=8.0
+            if is_gmail_mode:
+                # Live external Gmail / mail submission capture mode (e.g. from Outlook / Mail client)
+                capturer = PacketCapturer(
+                    output_pcap_path=output_pcap_path,
+                    port=587,
+                    interface=request.interface or get_capture_interface([587]),
+                    host=request.target_host
                 )
-                return client.execute_session()
+                duration = request.duration_seconds or request.timeout_seconds or 20.0
+                logger.info(f"Capturing live Gmail SMTP submission traffic on port 587 ({capturer.interface}) for {duration}s...")
+                capturer.start(settle_delay=0.2)
+                await asyncio.sleep(duration)
+                capturer.stop()
+            else:
+                # 1. Generate real X.509 certificate
+                cert_material = generate_test_certificate(
+                    common_name="mail.securemailscope.test",
+                    validity_days=365,
+                    key_size=2048
+                )
 
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, run_client_task)
+                # 2. Initialize & Start Real SMTP Server (must be listening before tcpdump starts)
+                server = AuthenticSmtpServer(
+                    host=TEST_SMTP_HOST,
+                    port=TEST_SMTP_PORT,
+                    cert_path=cert_material.cert_path,
+                    key_path=cert_material.key_path
+                )
+                server.start()
+                logger.info(f"Authentic SMTP Server listening on {TEST_SMTP_HOST}:{server.actual_port}")
 
-            # Settle delay to ensure all TCP teardown packets (FIN/ACK) are captured on the wire
-            await asyncio.sleep(0.5)
+                # 3. Initialize & Start Packet Capturer (ensures tcpdump is listening before client connects)
+                capturer = PacketCapturer(
+                    output_pcap_path=output_pcap_path,
+                    port=server.actual_port
+                )
+                capturer.start(settle_delay=0.2)
 
-            # 5. Stop Capturer and Server cleanly
-            capturer.stop()
-            server.stop()
-            server = None
+                # 4. Execute Real SMTP Client in a thread pool to avoid blocking the async event loop
+                def run_client_task():
+                    client = AuthenticSmtpClient(
+                        host=TEST_SMTP_HOST,
+                        port=server.actual_port,
+                        local_hostname="client.securemailscope.test",
+                        timeout=8.0
+                    )
+                    return client.execute_session()
+
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, run_client_task)
+
+                # Settle delay to ensure all TCP teardown packets (FIN/ACK) are captured on the wire
+                await asyncio.sleep(0.5)
+
+                # 5. Stop Capturer and Server cleanly
+                capturer.stop()
+                server.stop()
+                server = None
 
         except PermissionError as pe:
             logger.error(f"Capture permission error: {pe}")

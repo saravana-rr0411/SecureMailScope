@@ -9,6 +9,9 @@ from typing import Optional, List
 from capture_agent.config import (
     get_tcpdump_binary,
     detect_loopback_interface,
+    detect_active_interface,
+    get_capture_interface,
+    get_capture_ports,
     check_capture_capabilities,
     get_current_os
 )
@@ -16,23 +19,106 @@ from capture_agent.config import (
 logger = logging.getLogger("capture_agent.packet_capturer")
 
 
+def build_bpf_filter(
+    port: Optional[int] = None,
+    ports: Optional[List[int]] = None,
+    host: Optional[str] = None,
+    custom_filter: Optional[str] = None,
+) -> str:
+    """
+    Builds the strict BPF filter targeting only authorized mail submission ports.
+    Strictly restricted to TCP traffic. Never captures unrelated traffic.
+    """
+    # 1. Custom filter override
+    if custom_filter:
+        return custom_filter
+
+    # 2. Environment BPF filter override
+    env_filter = os.environ.get("CAPTURE_BPF_FILTER", "").strip()
+    if env_filter:
+        return env_filter
+
+    # Resolve ports
+    if ports is not None:
+        resolved_ports = list(ports)
+    elif port is not None:
+        resolved_ports = [port]
+    else:
+        resolved_ports = get_capture_ports()
+
+    # 3. Explicit host specified
+    if host:
+        if len(resolved_ports) == 1:
+            return f"tcp and port {resolved_ports[0]} and host {host}"
+        ports_clause = " or ".join(f"port {p}" for p in resolved_ports)
+        return f"tcp and ({ports_clause}) and host {host}"
+
+    # 4. Single port
+    if len(resolved_ports) == 1:
+        p = resolved_ports[0]
+        if p == 2525:
+            return "tcp and port 2525 and host 127.0.0.1"
+        return f"tcp and port {p}"
+
+    # 5. Dual port: 2525 (local controlled test server) + 587 (Gmail SMTP submission)
+    if set(resolved_ports) == {2525, 587}:
+        return "tcp and ((port 2525 and host 127.0.0.1) or port 587)"
+
+    # 6. Multiple arbitrary ports
+    ports_clause = " or ".join(f"port {p}" for p in resolved_ports)
+    return f"tcp and ({ports_clause})"
+
+
 class PacketCapturer:
     """
-    Manages live tcpdump packet capture targeting ONLY the controlled mail test port.
-    Never sniffs arbitrary interfaces or user traffic.
+    Manages live tcpdump packet capture targeting ONLY controlled mail ports.
+    Supports local controlled test port (2525) and real SMTP submission ports (e.g. 587 for Gmail).
+    Never sniffs arbitrary interfaces or unrelated user traffic.
     """
 
     def __init__(
         self,
         output_pcap_path: str,
-        port: int = 2525,
-        interface: Optional[str] = None
+        port: Optional[int] = None,
+        ports: Optional[List[int]] = None,
+        interface: Optional[str] = None,
+        host: Optional[str] = None,
+        bpf_filter: Optional[str] = None,
     ):
         self.output_pcap_path = output_pcap_path
-        self.port = port
-        self.interface = interface or detect_loopback_interface()
+
+        # Maintain backwards compatibility: self.port attribute always exists
+        if port is not None:
+            self.port = port
+            self.ports = [port]
+            if os.environ.get("CAPTURE_INCLUDE_SUBMISSION_PORT", "0").lower() in ("1", "true", "yes"):
+                if 587 not in self.ports:
+                    self.ports.append(587)
+        elif ports is not None:
+            self.ports = list(ports)
+            self.port = self.ports[0] if self.ports else 2525
+        else:
+            self.ports = get_capture_ports()
+            self.port = self.ports[0] if self.ports else 2525
+
+        self.host = host
+        self.custom_bpf_filter = bpf_filter
+        self.interface = interface or get_capture_interface(self.ports)
         self._process: Optional[subprocess.Popen] = None
         self._is_capturing = False
+
+    @property
+    def bpf_filter(self) -> str:
+        return self.build_bpf_filter()
+
+    def build_bpf_filter(self) -> str:
+        """Builds the strict BPF filter for this capturer instance."""
+        return build_bpf_filter(
+            port=self.port,
+            ports=self.ports,
+            host=self.host,
+            custom_filter=self.custom_bpf_filter,
+        )
 
     def start(self, settle_delay: float = 0.2):
         """
@@ -54,8 +140,8 @@ class PacketCapturer:
             except Exception:
                 pass
 
-        # Strict BPF filter targeting only our local test port and host
-        bpf_filter = f"tcp and port {self.port} and host 127.0.0.1"
+        # Strict BPF filter targeting only authorized mail submission ports
+        bpf_filter = self.build_bpf_filter()
 
         can_cap, cap_diag, requires_sudo = check_capture_capabilities(self.interface)
         use_sudo = requires_sudo or os.environ.get("CAPTURE_USE_SUDO", "0").lower() in ("1", "true", "yes")
@@ -193,3 +279,45 @@ class PacketCapturer:
     @property
     def is_running(self) -> bool:
         return self._is_capturing and self._process is not None and self._process.poll() is None
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="SecureMailScope Live Packet Capturer (e.g. Gmail SMTP / Port 587)")
+    parser.add_argument("-o", "--output", default="gmail_smtp_submission.pcap", help="Output PCAP file path (default: gmail_smtp_submission.pcap)")
+    parser.add_argument("-p", "--port", type=int, default=587, help="Target TCP port (default: 587)")
+    parser.add_argument("-i", "--interface", default=None, help="Network interface (e.g. en0, lo0; auto-detected if omitted)")
+    parser.add_argument("-d", "--duration", type=float, default=20.0, help="Capture duration in seconds (default: 20s)")
+    parser.add_argument("--host", default=None, help="Optional host filter (e.g. smtp.gmail.com)")
+    parser.add_argument("--filter", default=None, help="Custom BPF filter override")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    capturer = PacketCapturer(
+        output_pcap_path=args.output,
+        port=args.port,
+        interface=args.interface,
+        host=args.host,
+        bpf_filter=args.filter
+    )
+    print("=" * 65)
+    print("  SecureMailScope Authentic Mail Packet Capturer")
+    print("=" * 65)
+    print(f"[*] Target Interface : {capturer.interface}")
+    print(f"[*] BPF Filter       : {capturer.build_bpf_filter()}")
+    print(f"[*] Output PCAP      : {capturer.output_pcap_path}")
+    print(f"[*] Duration         : {args.duration}s")
+    print(f"[*] Starting live capture... Trigger Outlook / send email now!")
+    print("=" * 65)
+
+    capturer.start()
+    try:
+        time.sleep(args.duration)
+    finally:
+        capturer.stop()
+
+    print("=" * 65)
+    print(f"[+] Capture complete! Saved to: {os.path.abspath(capturer.output_pcap_path)}")
+    print(f"[+] File size: {os.path.getsize(capturer.output_pcap_path)} bytes")
+    print("=" * 65)

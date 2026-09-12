@@ -74,6 +74,22 @@ def get_current_os() -> str:
     return platform.system().lower()
 
 
+# Mail capture ports configuration
+# 2525: Controlled local authentic SMTP test server
+# 587: Standard submission SMTP (RFC 6409) used by Gmail (smtp.gmail.com:587) and Outlook
+DEFAULT_CAPTURE_PORTS = [2525, 587]
+
+
+def get_capture_ports() -> list[int]:
+    """Returns list of authorized TCP capture ports from environment or defaults."""
+    env_ports = os.environ.get("CAPTURE_PORTS", "")
+    if env_ports:
+        ports = [int(p.strip()) for p in env_ports.split(",") if p.strip().isdigit()]
+        if ports:
+            return ports
+    return list(DEFAULT_CAPTURE_PORTS)
+
+
 def detect_loopback_interface() -> str:
     """
     Detects appropriate loopback interface for packet capture.
@@ -88,6 +104,64 @@ def detect_loopback_interface() -> str:
     if current_os == "darwin":
         return "lo0"
     return "lo"
+
+
+def detect_active_interface() -> str:
+    """
+    Detects the primary active network interface on the system (e.g. en0 on macOS).
+    Used when capturing external traffic like Gmail SMTP (smtp.gmail.com:587).
+    """
+    explicit = os.environ.get("CAPTURE_INTERFACE")
+    if explicit:
+        return explicit
+
+    current_os = get_current_os()
+    if current_os == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["route", "-n", "get", "default"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2
+            )
+            for line in out.splitlines():
+                if "interface:" in line:
+                    iface = line.split(":")[1].strip()
+                    if iface:
+                        return iface
+        except Exception:
+            pass
+        return "en0"
+    elif current_os == "linux":
+        try:
+            out = subprocess.check_output(
+                ["ip", "route", "show", "default"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2
+            )
+            parts = out.split()
+            if "dev" in parts:
+                return parts[parts.index("dev") + 1]
+        except Exception:
+            pass
+        return "eth0"
+    return detect_loopback_interface()
+
+
+def get_capture_interface(ports: Optional[list[int]] = None) -> str:
+    """
+    Selects the appropriate capture interface:
+    - If CAPTURE_INTERFACE is set in env, always respect it.
+    - If ports contain external submission port (587) and no local test port (2525), select active interface (en0).
+    - Otherwise default to loopback interface (lo0).
+    """
+    explicit = os.environ.get("CAPTURE_INTERFACE")
+    if explicit:
+        return explicit
+    if ports and 587 in ports and 2525 not in ports:
+        return detect_active_interface()
+    return detect_loopback_interface()
 
 
 def get_tcpdump_binary() -> Optional[str]:

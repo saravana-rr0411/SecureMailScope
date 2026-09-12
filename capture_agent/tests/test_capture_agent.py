@@ -11,6 +11,9 @@ from capture_agent.main import app, capture_lock
 from capture_agent.config import (
     CAPTURE_AGENT_SECRET_KEY,
     detect_loopback_interface,
+    detect_active_interface,
+    get_capture_interface,
+    get_capture_ports,
     get_tcpdump_binary,
     check_capture_capabilities,
     get_current_os
@@ -18,7 +21,7 @@ from capture_agent.config import (
 from capture_agent.certs.cert_manager import generate_test_certificate
 from capture_agent.traffic.smtp_server import AuthenticSmtpServer
 from capture_agent.traffic.smtp_client import AuthenticSmtpClient
-from capture_agent.recorder.packet_capturer import PacketCapturer
+from capture_agent.recorder.packet_capturer import PacketCapturer, build_bpf_filter
 
 client = TestClient(app)
 
@@ -105,6 +108,63 @@ def test_packet_capturer_command_construction():
     assert capturer.port == 2525
     assert capturer.interface == "lo0"
     assert capturer.output_pcap_path == "/tmp/test_output.pcap"
+    assert capturer.bpf_filter == "tcp and port 2525 and host 127.0.0.1"
+
+
+def test_packet_capturer_bpf_filter_generation():
+    """Verify build_bpf_filter generates strict, accurate BPF filters for various configurations."""
+    # 1. Default port 2525 on loopback
+    f1 = build_bpf_filter(port=2525)
+    assert f1 == "tcp and port 2525 and host 127.0.0.1"
+
+    # 2. Port 587 (Gmail SMTP submission)
+    f2 = build_bpf_filter(port=587)
+    assert f2 == "tcp and port 587"
+
+    # 3. Port 587 targeting specific Gmail host
+    f3 = build_bpf_filter(port=587, host="smtp.gmail.com")
+    assert f3 == "tcp and port 587 and host smtp.gmail.com"
+
+    # 4. Dual ports [2525, 587]
+    f4 = build_bpf_filter(ports=[2525, 587])
+    assert f4 == "tcp and ((port 2525 and host 127.0.0.1) or port 587)"
+
+    # 5. Non-standard port with host
+    f5 = build_bpf_filter(port=1025, host="127.0.0.1")
+    assert f5 == "tcp and port 1025 and host 127.0.0.1"
+
+    # 6. Explicit custom filter override
+    f6 = build_bpf_filter(custom_filter="tcp and port 587 and host 142.250.185.109")
+    assert f6 == "tcp and port 587 and host 142.250.185.109"
+
+    # 7. Environment variable override
+    with patch.dict(os.environ, {"CAPTURE_BPF_FILTER": "tcp and port 587"}):
+        f7 = build_bpf_filter()
+        assert f7 == "tcp and port 587"
+
+
+def test_packet_capturer_interface_selection():
+    """Verify interface selection logic accurately picks loopback or active internet interface."""
+    # Port 2525 should use loopback
+    lo = get_capture_interface([2525])
+    assert lo in ("lo0", "lo", "127.0.0.1")
+
+    # Port 587 should use active interface
+    active_iface = get_capture_interface([587])
+    assert active_iface is not None
+    assert len(active_iface) > 0
+
+
+def test_get_capture_ports_configuration():
+    """Verify get_capture_ports parses CAPTURE_PORTS environment variable."""
+    with patch.dict(os.environ, {"CAPTURE_PORTS": "2525, 587, 465"}):
+        ports = get_capture_ports()
+        assert ports == [2525, 587, 465]
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("CAPTURE_PORTS", None)
+        default_ports = get_capture_ports()
+        assert default_ports == [2525, 587]
 
 
 def test_authentic_smtp_server_and_client_real_sockets():
@@ -313,3 +373,38 @@ def test_production_vercel_origin_and_private_network_preflight():
     assert "token" in h_resp.json()
 
 
+def test_gmail_capture_endpoint_dispatch():
+    """Verify /api/v1/capture/generate correctly identifies Gmail submission mode on port 587."""
+    fake_pcap_header = b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01\x00\x00\x00"
+
+    created_capturers = []
+    original_init = PacketCapturer.__init__
+
+    def tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created_capturers.append(self)
+
+    def fake_start(*args, **kwargs):
+        if created_capturers:
+            with open(created_capturers[-1].output_pcap_path, "wb") as f:
+                f.write(fake_pcap_header)
+
+    with patch.object(PacketCapturer, "__init__", tracking_init), \
+         patch.object(PacketCapturer, "start", side_effect=fake_start) as mock_start, \
+         patch.object(PacketCapturer, "stop") as mock_stop:
+
+        resp = client.post(
+            "/api/v1/capture/generate",
+            json={
+                "protocol": "SMTP",
+                "port": 587,
+                "duration_seconds": 0.05
+            },
+            headers={"Authorization": f"Bearer {CAPTURE_AGENT_SECRET_KEY}"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type") == "application/vnd.tcpdump.pcap"
+        assert len(resp.content) >= 24
+        assert mock_start.called
+        assert mock_stop.called

@@ -164,13 +164,20 @@ class WebSocketBridge:
 
             # Run capture in background to avoid blocking the WS listener
             asyncio.create_task(
-                self._execute_capture(ws, request_id, protocol, profile)
+                self._execute_capture(ws, request_id, protocol, profile, data)
             )
 
         else:
             logger.debug(f"Unhandled message type from hub: {msg_type}")
 
-    async def _execute_capture(self, ws, request_id: str, protocol: str, profile: str):
+    async def _execute_capture(
+        self,
+        ws,
+        request_id: str,
+        protocol: str,
+        profile: str,
+        data: Optional[dict] = None
+    ):
         """
         Executes the actual packet capture using the existing capture engine
         and streams the result back to the backend hub over WebSocket.
@@ -188,7 +195,7 @@ class WebSocketBridge:
             # Import capture components (lazy to avoid circular imports)
             from capture_agent.config import (
                 TEST_SMTP_HOST, TEST_SMTP_PORT, PCAP_STORAGE_DIR,
-                check_capture_capabilities
+                check_capture_capabilities, get_capture_interface
             )
             from capture_agent.certs.cert_manager import generate_test_certificate
             from capture_agent.traffic.smtp_server import AuthenticSmtpServer
@@ -217,52 +224,78 @@ class WebSocketBridge:
                 server = None
                 capturer = None
 
+                req_data = data or {}
+                target_port = req_data.get("port")
+                interface = req_data.get("interface")
+                target_host = req_data.get("target_host")
+                duration_seconds = req_data.get("duration_seconds")
+
+                is_gmail_mode = (
+                    target_port == 587 or
+                    (profile and profile.lower() in ("gmail", "submission", "port_587")) or
+                    (protocol and protocol.upper() in ("GMAIL", "SUBMISSION"))
+                )
+
                 try:
-                    logger.info(f"WS Bridge: Starting authentic {protocol} capture...")
-
-                    # 1. Generate real X.509 certificate
-                    cert_material = generate_test_certificate(
-                        common_name="mail.securemailscope.test",
-                        validity_days=365,
-                        key_size=2048
-                    )
-
-                    # 2. Start Real SMTP Server
-                    server = AuthenticSmtpServer(
-                        host=TEST_SMTP_HOST,
-                        port=TEST_SMTP_PORT,
-                        cert_path=cert_material.cert_path,
-                        key_path=cert_material.key_path
-                    )
-                    server.start()
-
-                    # 3. Start Packet Capturer
-                    capturer = PacketCapturer(
-                        output_pcap_path=output_pcap_path,
-                        port=server.actual_port
-                    )
-                    capturer.start(settle_delay=0.2)
-
-                    # 4. Execute Real SMTP Client
-                    def run_client_task():
-                        client = AuthenticSmtpClient(
-                            host=TEST_SMTP_HOST,
-                            port=server.actual_port,
-                            local_hostname="client.securemailscope.test",
-                            timeout=8.0
+                    if is_gmail_mode:
+                        # Live external Gmail / mail submission capture mode (e.g. from Outlook / Mail client)
+                        capturer = PacketCapturer(
+                            output_pcap_path=output_pcap_path,
+                            port=587,
+                            interface=interface or get_capture_interface([587]),
+                            host=target_host
                         )
-                        return client.execute_session()
+                        duration = duration_seconds or 20.0
+                        logger.info(f"WS Bridge: Capturing live Gmail SMTP submission traffic on port 587 ({capturer.interface}) for {duration}s...")
+                        capturer.start(settle_delay=0.2)
+                        await asyncio.sleep(duration)
+                        capturer.stop()
+                    else:
+                        logger.info(f"WS Bridge: Starting authentic {protocol} capture...")
 
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, run_client_task)
+                        # 1. Generate real X.509 certificate
+                        cert_material = generate_test_certificate(
+                            common_name="mail.securemailscope.test",
+                            validity_days=365,
+                            key_size=2048
+                        )
 
-                    # Settle delay for TCP teardown
-                    await asyncio.sleep(0.5)
+                        # 2. Start Real SMTP Server
+                        server = AuthenticSmtpServer(
+                            host=TEST_SMTP_HOST,
+                            port=TEST_SMTP_PORT,
+                            cert_path=cert_material.cert_path,
+                            key_path=cert_material.key_path
+                        )
+                        server.start()
 
-                    # 5. Stop capturer and server
-                    capturer.stop()
-                    server.stop()
-                    server = None
+                        # 3. Start Packet Capturer
+                        capturer = PacketCapturer(
+                            output_pcap_path=output_pcap_path,
+                            port=server.actual_port
+                        )
+                        capturer.start(settle_delay=0.2)
+
+                        # 4. Execute Real SMTP Client
+                        def run_client_task():
+                            client = AuthenticSmtpClient(
+                                host=TEST_SMTP_HOST,
+                                port=server.actual_port,
+                                local_hostname="client.securemailscope.test",
+                                timeout=8.0
+                            )
+                            return client.execute_session()
+
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, run_client_task)
+
+                        # Settle delay for TCP teardown
+                        await asyncio.sleep(0.5)
+
+                        # 5. Stop capturer and server
+                        capturer.stop()
+                        server.stop()
+                        server = None
 
                 finally:
                     if server:
