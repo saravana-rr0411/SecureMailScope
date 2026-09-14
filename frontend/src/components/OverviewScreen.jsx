@@ -272,23 +272,30 @@ export default function OverviewScreen({
     };
   });
 
-  // SVG Chart Geometry
-  const chartW = 760;
-  const chartH = 190;
+  // SVG Chart Geometry with dynamic horizontal scaling for arbitrary PCAP counts
+  const numPoints = trendData.length;
+  const minPointWidth = 68;
+  const basePlotW = 660; // default plot width when few captures exist
+  const isScrollable = numPoints > 1 && (numPoints - 1) * minPointWidth > basePlotW;
+  const plotW = numPoints <= 1
+    ? basePlotW
+    : Math.max(basePlotW, (numPoints - 1) * minPointWidth);
+
   const padLeft = 55;
   const padRight = 45;
   const padTop = 28;
   const padBottom = 38;
-  const plotW = chartW - padLeft - padRight;
+  const chartW = padLeft + plotW + padRight;
+  const chartH = 190;
   const plotH = chartH - padTop - padBottom;
 
   const getY = (val) => padTop + (1 - Math.max(0, Math.min(100, val)) / 100) * plotH;
 
   const points = trendData.map((d, i) => {
-    const x = trendData.length === 1
-      ? padLeft + plotW / 2
-      : padLeft + (i / (trendData.length - 1)) * plotW;
-    const y = getY(d.score);
+    const x = numPoints === 1
+      ? Math.round(padLeft + plotW / 2)
+      : Math.round(padLeft + (i / (numPoints - 1)) * plotW);
+    const y = Math.round(getY(d.score));
     return { ...d, x, y };
   });
 
@@ -610,9 +617,9 @@ export default function OverviewScreen({
       {/* ==================================================================== */}
       {/* TOP / FIRST HALF: OVERALL SECURITY RISK & KEY METRICS                */}
       {/* ==================================================================== */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col lg:flex-row items-center justify-between gap-8 transition-colors duration-150">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-6 xl:gap-8 transition-colors duration-150 max-w-full">
         {/* Left: Visually Dominant Overall Risk Score & Selected PCAP */}
-        <div className="flex items-center gap-6 shrink-0">
+        <div className="flex items-center gap-5 sm:gap-6 min-w-0 shrink">
           <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center shrink-0">
             <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 160 160">
               <circle cx="80" cy="80" fill="transparent" r="66" stroke={theme === 'dark' ? '#1e293b' : '#F1F5F9'} strokeWidth="10" />
@@ -637,7 +644,7 @@ export default function OverviewScreen({
             </div>
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 min-w-0">
             <div className="flex flex-col gap-0.5">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 font-sans">
                 Selected PCAP AI Risk
@@ -665,8 +672,8 @@ export default function OverviewScreen({
             <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-sans">
               {postureLabel}
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-semibold text-slate-900 dark:text-white max-w-sm truncate" title={activeCapture?.filename}>
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-semibold text-slate-900 dark:text-white max-w-[200px] sm:max-w-xs truncate" title={activeCapture?.filename}>
                 <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400 shrink-0">description</span>
                 <span className="truncate">{activeCapture?.filename || 'No capture selected'}</span>
               </div>
@@ -708,54 +715,86 @@ export default function OverviewScreen({
         </div>
 
         {/* Right: Clean Grid of 4 Key Metrics */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full lg:max-w-2xl min-w-0">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 w-full xl:max-w-2xl min-w-0">
           {/* Metric 1: Captures Analyzed */}
-          <div className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0">
-            <div>
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans">Captures</span>
+          <div className="p-3.5 sm:p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0 h-full min-h-[112px] box-border">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="material-symbols-outlined text-[15px] text-slate-500 dark:text-slate-400 shrink-0">swap_calls</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans truncate">
+                Captures
+              </span>
             </div>
-            <div className="mt-3 flex flex-col min-w-0">
-              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight">{totalReports}</span>
-              <span className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium mt-0.5 truncate">Analysed</span>
+            <div className="my-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight tracking-tight">
+                {totalReports}
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium truncate">
+              Analysed
             </div>
           </div>
 
           {/* Metric 2: Secure Captures */}
-          <div className="p-4 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/50 shadow-2xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-150 flex flex-col justify-between min-w-0">
-            <div>
-              <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-400 uppercase tracking-wider font-sans">Secure</span>
+          <div className="p-3.5 sm:p-4 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/50 shadow-2xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-150 flex flex-col justify-between min-w-0 h-full min-h-[112px] box-border">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="material-symbols-outlined text-[15px] text-emerald-700 dark:text-emerald-400 shrink-0">verified_user</span>
+              <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-400 uppercase tracking-wider font-sans truncate">
+                Secure
+              </span>
             </div>
-            <div className="mt-3 flex items-baseline justify-between gap-1.5 min-w-0">
-              <span className="text-2xl sm:text-3xl font-bold text-emerald-700 dark:text-emerald-400 font-sans tabular-nums leading-tight">{secureReports}</span>
+            <div className="my-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-emerald-700 dark:text-emerald-400 font-sans tabular-nums leading-tight tracking-tight">
+                {secureReports}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 min-w-0">
               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 font-sans tabular-nums shrink-0">
                 {securePct}%
+              </span>
+              <span className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 font-sans font-medium truncate">
+                of total
               </span>
             </div>
           </div>
 
           {/* Metric 3: Insecure Captures */}
-          <div className="p-4 rounded-xl bg-rose-50/35 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/50 shadow-2xs hover:border-rose-300 dark:hover:border-rose-700 transition-all duration-150 flex flex-col justify-between min-w-0">
-            <div>
-              <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-400 uppercase tracking-wider font-sans">Insecure</span>
+          <div className="p-3.5 sm:p-4 rounded-xl bg-rose-50/35 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/50 shadow-2xs hover:border-rose-300 dark:hover:border-rose-700 transition-all duration-150 flex flex-col justify-between min-w-0 h-full min-h-[112px] box-border">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="material-symbols-outlined text-[15px] text-rose-700 dark:text-rose-400 shrink-0">gpp_maybe</span>
+              <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-400 uppercase tracking-wider font-sans truncate">
+                Insecure
+              </span>
             </div>
-            <div className="mt-3 flex items-baseline justify-between gap-1.5 min-w-0">
-              <span className="text-2xl sm:text-3xl font-bold text-rose-700 dark:text-rose-400 font-sans tabular-nums leading-tight">{insecureReports}</span>
+            <div className="my-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-rose-700 dark:text-rose-400 font-sans tabular-nums leading-tight tracking-tight">
+                {insecureReports}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 min-w-0">
               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-300 font-sans tabular-nums shrink-0">
                 {insecurePct}%
+              </span>
+              <span className="text-[11px] text-rose-700/80 dark:text-rose-400/80 font-sans font-medium truncate">
+                of total
               </span>
             </div>
           </div>
 
           {/* Metric 4: Historical Fleet Average AI Risk */}
-          <div className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0">
-            <div>
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans">Fleet Avg Risk</span>
+          <div className="p-3.5 sm:p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600 transition-all duration-150 flex flex-col justify-between min-w-0 h-full min-h-[112px] box-border">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="material-symbols-outlined text-[15px] text-slate-500 dark:text-slate-400 shrink-0">hub</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans truncate">
+                Fleet Avg Risk
+              </span>
             </div>
-            <div className="mt-3 flex flex-col min-w-0">
-              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight">
+            <div className="my-1.5 min-w-0">
+              <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white font-sans tabular-nums leading-tight tracking-tight">
                 {fleetAvgRisk != null ? fleetAvgRisk : "—"}
               </span>
-              <span className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium mt-0.5 truncate">{totalReports} PCAPs</span>
+            </div>
+            <div className="text-[11px] text-slate-400 dark:text-slate-500 font-sans font-medium truncate">
+              {totalReports} PCAPs
             </div>
           </div>
         </div>
@@ -764,12 +803,18 @@ export default function OverviewScreen({
       {/* ==================================================================== */}
       {/* SECOND HALF: SECURITY RISK TREND (Dynamic SVG Line Chart)            */}
       {/* ==================================================================== */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col gap-4 transition-colors duration-150">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col gap-4 transition-colors duration-150 max-w-full overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-3">
           <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">trending_up</span>
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Security Risk Trend</h2>
+              {isScrollable && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
+                  <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
+                  <span>{numPoints} Captures · Scroll</span>
+                </span>
+              )}
             </div>
             <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
               Chronological AI risk trajectory across analyzed captures
@@ -777,18 +822,18 @@ export default function OverviewScreen({
           </div>
 
           {/* Trend Axis Guidance Legend */}
-          <div className="flex items-center gap-4 text-xs font-medium">
+          <div className="flex items-center gap-4 text-xs font-medium shrink-0">
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
-              <span className="text-slate-700 dark:text-slate-300">Low Risk (0–20)</span>
+              <span className="text-slate-700 dark:text-slate-300 text-[11px]">Low Risk (0–20)</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-              <span className="text-slate-700 dark:text-slate-300">Moderate (21–50)</span>
+              <span className="text-slate-700 dark:text-slate-300 text-[11px]">Moderate (21–50)</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-rose-600"></span>
-              <span className="text-slate-700 dark:text-slate-300">High / Critical (&gt;50)</span>
+              <span className="text-slate-700 dark:text-slate-300 text-[11px]">High / Critical (&gt;50)</span>
             </div>
           </div>
         </div>
@@ -800,9 +845,24 @@ export default function OverviewScreen({
             <span>No analyzed PCAP capture data available yet</span>
           </div>
         ) : (
-          <div className="w-full overflow-x-auto">
-            <div className="min-w-[640px] relative">
-              <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-48 select-none">
+          <div className="w-full overflow-x-auto overflow-y-hidden select-none custom-scrollbar rounded-lg pb-1">
+            <div
+              className="relative"
+              style={{
+                width: isScrollable ? `${chartW}px` : '100%',
+                minWidth: '100%',
+                height: `${chartH + 8}px`
+              }}
+            >
+              <svg
+                viewBox={`0 0 ${chartW} ${chartH}`}
+                preserveAspectRatio={isScrollable ? 'none' : 'xMidYMid meet'}
+                style={{
+                  width: isScrollable ? `${chartW}px` : '100%',
+                  height: `${chartH}px`
+                }}
+                className="select-none block"
+              >
                 <defs>
                   <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#006591" stopOpacity="0.22" />
@@ -992,7 +1052,6 @@ export default function OverviewScreen({
               <tr className="bg-slate-50/80 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800 text-[11px] uppercase tracking-wider font-sans">
                 <th className="py-3 px-4 sm:px-6">Filename</th>
                 <th className="py-3 px-4">Total Packets</th>
-                <th className="py-3 px-4">Protocols</th>
                 <th className="py-3 px-4">AI Risk Score</th>
                 <th className="py-3 px-4">Risk Level</th>
                 <th className="py-3 px-4">Status</th>
@@ -1002,7 +1061,7 @@ export default function OverviewScreen({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-sans">
               {pcapList.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400 dark:text-slate-500 text-xs font-medium">
+                  <td colSpan={6} className="py-8 text-center text-slate-400 dark:text-slate-500 text-xs font-medium">
                     No PCAP captures analyzed yet. Upload a capture to begin forensic analysis.
                   </td>
                 </tr>
@@ -1050,10 +1109,6 @@ export default function OverviewScreen({
                   const statusDotClass = isSecure ? 'bg-emerald-600' : isIncomplete ? 'bg-amber-500' : 'bg-rose-600';
                   const statusText = isSecure ? 'SECURE' : isIncomplete ? 'INCOMPLETE' : 'INSECURE';
 
-                  // Unique protocols detected in this capture
-                  const protocols = Array.from(new Set(pSessions.map(s => s.protocol).filter(Boolean)));
-                  if (protocols.length === 0) protocols.push("SMTP");
-
                   const totalPackets = pcap?.total_packets ?? (pSessions.length * 148);
                   const isActive = (pcap?.capture_id && activeCapture?.capture_id && pcap.capture_id === activeCapture.capture_id)
                     || (pcap?.filename && activeCapture?.filename && pcap.filename.toLowerCase() === activeCapture.filename.toLowerCase());
@@ -1087,20 +1142,6 @@ export default function OverviewScreen({
                       {/* Total Packets */}
                       <td className="py-3.5 px-4 font-sans font-medium tabular-nums text-slate-600 dark:text-slate-400 text-xs">
                         {totalPackets.toLocaleString()}
-                      </td>
-
-                      {/* Protocols */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex flex-wrap gap-1">
-                          {protocols.map((proto) => (
-                            <span
-                              key={proto}
-                              className="px-2 py-0.5 rounded font-mono text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
-                            >
-                              {proto}
-                            </span>
-                          ))}
-                        </div>
                       </td>
 
                       {/* AI Risk Score */}

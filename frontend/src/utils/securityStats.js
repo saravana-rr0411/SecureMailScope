@@ -121,20 +121,72 @@ export function hasConfirmedPlaintextPayload(session) {
 }
 
 /**
- * Extract the analysis/capture timestamp for calendar grouping.
- * Prioritizes analyzed_at (when the capture was analyzed), followed by analyzedAt or timestamp.
+ * Parse PCAP timestamp safely into epoch milliseconds in local time.
+ * Handles ISO timestamps with tz offsets, numeric timestamps, and bare YYYY-MM-DD dates without shifting.
+ *
+ * @param {Object} pcap
+ * @returns {number | null}
+ */
+export function parsePcapTimestamp(pcap) {
+  if (!pcap) return null;
+  const raw = pcap.analyzed_at || pcap.analyzedAt || pcap.timestamp;
+  if (!raw) return null;
+
+  if (raw instanceof Date) {
+    const t = raw.getTime();
+    return isNaN(t) ? null : t;
+  }
+
+  if (typeof raw === 'number') {
+    const ms = raw < 1e11 ? raw * 1000 : raw;
+    return isNaN(ms) ? null : ms;
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    // Bare date YYYY-MM-DD without time or timezone: treat as local midnight
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [y, m, d] = trimmed.split('-').map(Number);
+      return new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    }
+
+    const dt = new Date(trimmed);
+    const ms = dt.getTime();
+    if (!isNaN(ms)) return ms;
+  }
+
+  return null;
+}
+
+/**
+ * Extract canonical YYYY-MM-DD local date key from PCAP item.
+ *
+ * @param {Object} pcap
+ * @returns {string}
+ */
+export function getPcapDateKey(pcap) {
+  const ms = parsePcapTimestamp(pcap);
+  if (ms == null) return '';
+  const d = new Date(ms);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Extract the analysis/capture timestamp for calendar grouping as a local Date object.
+ * Prioritizes analyzed_at, followed by analyzedAt or timestamp.
  * Defaults to current date if missing.
  *
  * @param {Object} pcap
  * @returns {Date}
  */
 export function getCaptureDate(pcap) {
-  if (!pcap) return new Date();
-  const ts = pcap.analyzed_at || pcap.analyzedAt || pcap.timestamp;
-  if (ts) {
-    const d = new Date(ts);
-    if (!isNaN(d.getTime())) return d;
-  }
+  const ms = parsePcapTimestamp(pcap);
+  if (ms != null) return new Date(ms);
   return new Date();
 }
 
@@ -283,12 +335,9 @@ export function deriveDailyTrends(analyzedPcaps = []) {
   const dayMap = new Map();
 
   pcaps.forEach((pcap) => {
-    if (!pcap) return;
+    const dayKey = getPcapDateKey(pcap);
+    if (!dayKey) return;
     const d = getCaptureDate(pcap);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const dayKey = `${year}-${month}-${day}`;
     const label = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
 
     if (!dayMap.has(dayKey)) {

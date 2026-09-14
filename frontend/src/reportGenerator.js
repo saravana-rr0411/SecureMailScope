@@ -11,12 +11,22 @@ const autoTable = _autoTable.default || _autoTable;
  * e.g. "01_secure_smtp_tls12.pcap" -> "01_secure_smtp_tls12_report.pdf"
  */
 export function getReportFilename(captureData, extension) {
-  const rawName = captureData?.filename || 'capture';
+  const cleanExt = extension.startsWith('.') ? extension.slice(1) : extension;
+  if (captureData?.reportFilename) {
+    return captureData.reportFilename.endsWith(`.${cleanExt}`)
+      ? captureData.reportFilename
+      : `${captureData.reportFilename}.${cleanExt}`;
+  }
+  const rawName = captureData?.filename;
+  if (!rawName || rawName === 'capture' || rawName === 'pcap') {
+    return `SecureMailScope-Executive-Report.${cleanExt}`;
+  }
   const withoutExt = String(rawName).replace(/\.(pcapng|pcap|cap)$/i, '');
   const sanitized = withoutExt.trim().replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_');
-  const base = sanitized || 'capture';
-  const cleanExt = extension.startsWith('.') ? extension.slice(1) : extension;
-  return `${base}_report.${cleanExt}`;
+  if (sanitized.toLowerCase().startsWith('securemailscope-executive-report')) {
+    return `${sanitized}.${cleanExt}`;
+  }
+  return `SecureMailScope-Executive-Report-${sanitized}.${cleanExt}`;
 }
 
 /**
@@ -164,18 +174,6 @@ export function extractCaptureReportContext(captureData) {
   const aiConfidence = aiRisk.confidence != null ? Math.round(aiRisk.confidence * 100) : 95;
   const topRiskFactors = aiRisk.top_risk_factors || [];
 
-  // Deterministic Posture
-  const postureData = s0.posture || captureData?.posture || {};
-  const postureStatus = postureData.security_posture || (isTlsObserved ? 'SECURE' : 'AT_RISK');
-  const postureScore = postureData.score != null ? postureData.score : (isTlsObserved ? 100 : 0);
-  const postureRiskLevel = postureData.risk_level || (postureScore >= 80 ? 'LOW' : postureScore >= 50 ? 'MODERATE' : 'HIGH');
-
-  // Isolation Forest Anomaly
-  const anomalyData = s0.ai_analysis || captureData?.ai_analysis || {};
-  const isAnomaly = anomalyData.anomaly_detected === true;
-  const anomalyStatus = isAnomaly ? 'OUTLIER' : 'NORMAL';
-  const anomalyScore = anomalyData.anomaly_score != null ? Number(anomalyData.anomaly_score).toFixed(2) : '0.00';
-
   // Protocol & TLS Attributes
   const tls = s0.tls || {};
   const isTlsObserved = tls.detected === true || (tls.version && tls.version !== 'None' && tls.version !== 'Plaintext');
@@ -197,6 +195,18 @@ export function extractCaptureReportContext(captureData) {
   const isCertNotYetValid = cert.not_yet_valid === true || cert.expiration_status === 'NOT_YET_VALID';
   const isLeafSelfSigned = cert.self_signed === true;
   const isChainValid = chainValidation.chain_status === 'VALID' || chainValidation.chain_valid === true;
+
+  // Deterministic Posture
+  const postureData = s0.posture || captureData?.posture || {};
+  const postureStatus = postureData.security_posture || (isTlsObserved ? 'SECURE' : 'AT_RISK');
+  const postureScore = postureData.score != null ? postureData.score : (isTlsObserved ? 100 : 0);
+  const postureRiskLevel = postureData.risk_level || (postureScore >= 80 ? 'LOW' : postureScore >= 50 ? 'MODERATE' : 'HIGH');
+
+  // Isolation Forest Anomaly
+  const anomalyData = s0.ai_analysis || captureData?.ai_analysis || {};
+  const isAnomaly = anomalyData.anomaly_detected === true;
+  const anomalyStatus = isAnomaly ? 'OUTLIER' : 'NORMAL';
+  const anomalyScore = anomalyData.anomaly_score != null ? Number(anomalyData.anomaly_score).toFixed(2) : '0.00';
 
   // Findings
   const assessmentFindings = s0.assessment?.findings || s0.findings || [];
