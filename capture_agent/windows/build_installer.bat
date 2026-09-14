@@ -259,11 +259,14 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
-if not exist "%BUILD_DIR%\python\PythonService.exe" if not exist "%BUILD_DIR%\python\pythonservice.exe" (
-    if not exist "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" (
-        echo [-] Error: pywin32 service host binary (PythonService.exe) missing from staged environment!
-        exit /b 1
-    )
+set "HOST_FOUND=0"
+if exist "%BUILD_DIR%\python\PythonService.exe" set "HOST_FOUND=1"
+if exist "%BUILD_DIR%\python\pythonservice.exe" set "HOST_FOUND=1"
+if exist "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" set "HOST_FOUND=1"
+
+if "!HOST_FOUND!"=="0" (
+    echo [-] Error: pywin32 service host binary PythonService.exe is missing from staged environment!
+    exit /b 1
 )
 echo [+] Verified PythonService host binary confirmed present.
 echo [+] Self-contained Python runtime prepared successfully.

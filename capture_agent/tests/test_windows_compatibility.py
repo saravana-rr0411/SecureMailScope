@@ -236,6 +236,13 @@ def test_build_installer_script_validation():
     assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in content
     assert "exit /b 1" in content
 
+    # Ensure no echo statements inside blocks contain unquoted/unescaped parentheses
+    for line in content.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("echo ") and not trimmed.startswith("echo =="):
+            if line.startswith("    ") or line.startswith("\t"):
+                assert "(" not in trimmed and ")" not in trimmed, f"CMD block parser hazard: parenthesis in block echo: {line}"
+
 
 def test_windows_service_install_root_and_paths():
     """Verify Windows Service module defines INSTALL_ROOT and sets up sys.path and directories."""
