@@ -83,6 +83,126 @@ jobs:
           echo "SHA256=$SHA256" >> $GITHUB_ENV
           echo "[SUCCESS] Installer validation passed."
 
+      - name: Validate Windows Service SCM Lifecycle & Live Startup
+        shell: powershell
+        run: |
+          $stagedPy = (Resolve-Path "build\windows_payload\python\python.exe").Path
+          $svcScript = (Resolve-Path "build\windows_payload\capture_agent\windows\service.py").Path
+          $serviceName = "SecureMailScopeCaptureAgent"
+          $logDir = "C:\ProgramData\SecureMailScope\CaptureAgent\logs"
+          $logFile = Join-Path $logDir "service.log"
+          $envFile = "C:\ProgramData\SecureMailScope\CaptureAgent\agent.env"
+
+          Write-Host "=== Staged Python: $stagedPy ==="
+          Write-Host "=== Service Script: $svcScript ==="
+
+          # 1. Provision safe test-only credentials in ProgramData
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          Set-Content -Path $envFile -Value @(
+            "# Safe CI Test Configuration (Non-production)",
+            "BACKEND_WS_URL=wss://127.0.0.1:9999/ws/agent",
+            "CAPTURE_AGENT_SECRET_KEY=ci-test-verification-secret",
+            "CAPTURE_AGENT_API_KEY=ci-test-verification-secret"
+          ) -Encoding utf8
+
+          try {
+            # 2. Register Windows Service with SCM
+            Write-Host "[*] Registering service with SCM..."
+            & $stagedPy $svcScript --startup=auto install
+            if ($LASTEXITCODE -ne 0) {
+              throw "Service registration failed with exit code $LASTEXITCODE"
+            }
+
+            # 3. Verify SCM registration and query configuration
+            Write-Host "[*] Querying service configuration in SCM..."
+            & sc.exe qc $serviceName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Service $serviceName is not registered in SCM"
+            }
+
+            # 4. Start Windows Service via SCM (invokes PythonService.exe)
+            Write-Host "[*] Starting service via SCM..."
+            & sc.exe start $serviceName
+            $startExit = $LASTEXITCODE
+            if ($startExit -ne 0 -and $startExit -ne 1056) {
+              Write-Warning "sc.exe start returned code $startExit"
+            }
+
+            # 5. Poll for RUNNING state (up to 20 seconds)
+            Write-Host "[*] Polling for service to reach RUNNING state..."
+            $isRunning = $false
+            for ($i = 1; $i -le 20; $i++) {
+              Start-Sleep -Seconds 1
+              $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+              if ($svc -and $svc.Status -eq 'Running') {
+                $isRunning = $true
+                Write-Host "[+] Service reached RUNNING state in $i seconds!"
+                break
+              }
+              Write-Host "    Attempt $i: Status is $($svc.Status)"
+            }
+
+            if (-not $isRunning) {
+              throw "Service failed to reach RUNNING state within 20 seconds."
+            }
+
+            # 6. Verify Uvicorn HTTP health check responds on 127.0.0.1:9000
+            Write-Host "[*] Validating agent health check endpoint (http://127.0.0.1:9000/health)..."
+            $isHealthy = $false
+            for ($j = 1; $j -le 10; $j++) {
+              try {
+                $resp = Invoke-RestMethod -Uri "http://127.0.0.1:9000/health" -TimeoutSec 2 -ErrorAction Stop
+                if ($resp.status -eq "ok") {
+                  $isHealthy = $true
+                  Write-Host "[+] HTTP /health responded 200 OK: $($resp | ConvertTo-Json -Compress)"
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+
+            if (-not $isHealthy) {
+              throw "Capture Agent service is RUNNING, but http://127.0.0.1:9000/health did not respond."
+            }
+
+            Write-Host "[SUCCESS] Windows Service SCM lifecycle and live startup validated successfully!"
+          }
+          catch {
+            Write-Error "[-] Service startup validation failure: $_"
+
+            Write-Host "=== Diagnostic: sc queryex ==="
+            & sc.exe queryex $serviceName
+
+            if (Test-Path $logFile) {
+              Write-Host "=== Diagnostic: service.log ==="
+              Get-Content $logFile -Tail 100
+            } else {
+              Write-Host "=== Diagnostic: service.log does not exist ==="
+            }
+
+            Write-Host "=== Diagnostic: System Event Log (SCM) ==="
+            try {
+              Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'} -MaxEvents 10 -ErrorAction SilentlyContinue |
+                Format-Table TimeCreated, Id, Message -Wrap | Out-String | Write-Host
+            } catch {}
+
+            Write-Host "=== Diagnostic: Application Event Log ==="
+            try {
+              Get-WinEvent -FilterHashtable @{LogName='Application'} -MaxEvents 10 -ErrorAction SilentlyContinue |
+                Format-Table TimeCreated, Id, Message -Wrap | Out-String | Write-Host
+            } catch {}
+
+            exit 1
+          }
+          finally {
+            Write-Host "[*] Cleaning up test service..."
+            & sc.exe stop $serviceName | Out-Null
+            Start-Sleep -Seconds 2
+            & $stagedPy $svcScript remove | Out-Null
+            Write-Host "[+] Cleanup completed."
+          }
+
       - name: Upload Installer as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:

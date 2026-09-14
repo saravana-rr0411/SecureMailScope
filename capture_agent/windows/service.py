@@ -11,20 +11,63 @@ INSTALL_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(INSTALL_ROOT) not in sys.path:
     sys.path.insert(0, str(INSTALL_ROOT))
 
+import platform
+import tempfile
+
 # Set up directories and logging early
-DATA_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "SecureMailScope" / "CaptureAgent"
+if platform.system().lower() == "windows":
+    DATA_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "SecureMailScope" / "CaptureAgent"
+else:
+    DATA_DIR = Path(os.environ.get("PROGRAMDATA", tempfile.gettempdir())) / "SecureMailScope" / "CaptureAgent"
 LOG_DIR = DATA_DIR / "logs"
 STORAGE_DIR = DATA_DIR / "storage"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 log_file = LOG_DIR / "service.log"
 
-logging.basicConfig(
-    filename=str(log_file),
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] (WindowsService) %(message)s"
-)
+# In a Windows service (running under SCM/LocalSystem without an interactive console),
+# sys.stdout, sys.stderr, and sys.stdin may be None.
+# Redirect None streams to os.devnull to prevent AttributeError in libraries writing to stdout/stderr.
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stdin is None:
+    try:
+        sys.stdin = open(os.devnull, "r", encoding="utf-8")
+    except Exception:
+        pass
+
+# Configure root logger and dedicated service logger with explicit FileHandler
 logger = logging.getLogger("SecureMailScopeService")
+logger.setLevel(logging.INFO)
+
+file_handler_present = any(isinstance(h, logging.FileHandler) for h in logger.handlers)
+if not file_handler_present:
+    try:
+        fh = logging.FileHandler(str(log_file), encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] (WindowsService) %(message)s"))
+        logger.addHandler(fh)
+    except Exception:
+        pass
+
+try:
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] (WindowsService) %(message)s"
+    )
+except Exception:
+    pass
 
 SERVICE_NAME = "SecureMailScopeCaptureAgent"
 SERVICE_DISPLAY_NAME = "SecureMailScope Local Capture Agent"
@@ -43,6 +86,21 @@ except ImportError:
 from typing import Optional
 
 WIN32_VERBS = {"install", "start", "stop", "restart", "remove", "update", "status", "debug"}
+
+
+def get_service_class_string() -> str:
+    r"""
+    Return the fully qualified service class string in the format expected by pywin32's PythonService.exe host:
+    [path\to\]module.ClassName
+
+    PythonService.exe's C++ loader (LoadPythonServiceClass) requires this format so it can locate
+    the directory from the backslash, prepend it to sys.path, and import the module directly.
+    Passing a dotted package name without a path causes LoadPythonServiceClass to fail with
+    AttributeError and SCM to terminate the service with service-specific error 1066 / 1 ('Incorrect function').
+    """
+    script_path = Path(__file__).resolve()
+    base_path = str(script_path.with_suffix("")).replace("/", "\\")
+    return f"{base_path}.{SecureMailScopeWindowsService.__name__}"
 
 
 def normalize_service_argv(argv: list) -> list:
@@ -144,44 +202,58 @@ class SecureMailScopeWindowsService(BaseServiceFramework):
         _exe_name_ = _host_exe
 
     def __init__(self, args):
+        logger.info("SecureMailScopeWindowsService.__init__ called with args: %s", args)
         super().__init__(args)
         if WIN32_AVAILABLE:
             self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self._stop_event = threading.Event()
         self._worker_thread = None
+        logger.info("SecureMailScopeWindowsService.__init__ completed successfully.")
 
     def SvcStop(self):
+        logger.info("Received service stop request from Service Control Manager.")
         if WIN32_AVAILABLE:
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
             win32event.SetEvent(self.hWaitStop)
-        logger.info("Received service stop request from Service Control Manager.")
         self._stop_event.set()
 
     def SvcDoRun(self):
-        if WIN32_AVAILABLE:
-            servicemanager.LogMsg(
-                servicemanager.EVENTLOG_INFORMATION_TYPE,
-                servicemanager.PYS_SERVICE_STARTED,
-                (self._svc_name_, "")
+        try:
+            logger.info("SecureMailScopeWindowsService SvcDoRun starting...")
+            if WIN32_AVAILABLE:
+                servicemanager.LogMsg(
+                    servicemanager.EVENTLOG_INFORMATION_TYPE,
+                    servicemanager.PYS_SERVICE_STARTED,
+                    (self._svc_name_, "")
+                )
+                self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+            logger.info("Service status reported as RUNNING to SCM.")
+
+            # Load environment configuration from agent.env if available
+            load_service_env()
+
+            self._worker_thread = threading.Thread(
+                target=run_agent_server,
+                args=(self._stop_event,),
+                name="AgentServerWorker",
+                daemon=True
             )
-        logger.info("Service started successfully.")
+            self._worker_thread.start()
+            logger.info("Worker thread started for Uvicorn.")
 
-        # Load environment configuration from agent.env if available
-        load_service_env()
-
-        self._worker_thread = threading.Thread(
-            target=run_agent_server,
-            args=(self._stop_event,),
-            name="AgentServerWorker",
-            daemon=True
-        )
-        self._worker_thread.start()
-
-        # Wait until SCM sends stop signal
-        if WIN32_AVAILABLE:
-            win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
-            logger.info("Service terminating.")
-            self.ReportServiceStatus(win32service.SERVICE_STOPPED)
+            # Wait until SCM sends stop signal
+            if WIN32_AVAILABLE:
+                win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
+                logger.info("Service stop event received; exiting SvcDoRun.")
+        except Exception as exc:
+            logger.error("Fatal exception in SvcDoRun: %s", exc, exc_info=True)
+            if WIN32_AVAILABLE:
+                self.ReportServiceStatus(
+                    win32service.SERVICE_STOPPED,
+                    win32ExitCode=win32service.ERROR_SERVICE_SPECIFIC_ERROR,
+                    svcExitCode=1
+                )
+            raise
 
 
 def standalone_main():
@@ -216,11 +288,12 @@ if __name__ == "__main__":
     # Case 2: Windows Service management verbs (install, start, stop, remove, etc.)
     elif WIN32_AVAILABLE and any(arg.lower() in WIN32_VERBS for arg in sys.argv[1:]):
         normalized_argv = normalize_service_argv(sys.argv)
-        logger.info("Processing service command line: %s", normalized_argv)
+        service_class_str = get_service_class_string()
+        logger.info("Processing service command line: %s (serviceClassString: %s)", normalized_argv, service_class_str)
         try:
             win32serviceutil.HandleCommandLine(
                 SecureMailScopeWindowsService,
-                serviceClassString="capture_agent.windows.service.SecureMailScopeWindowsService",
+                serviceClassString=service_class_str,
                 argv=normalized_argv
             )
             logger.info("win32serviceutil.HandleCommandLine finished successfully.")

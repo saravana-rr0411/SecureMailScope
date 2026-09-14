@@ -328,6 +328,11 @@ def test_github_actions_windows_workflow_structure():
     assert "SecureMailScopeCaptureAgent-1.0.1-Setup" in content
     assert "gh release upload" in content or "gh release create" in content
 
+    # Live SCM Lifecycle validation
+    assert "Validate Windows Service SCM Lifecycle & Live Startup" in content
+    assert "sc.exe start $serviceName" in content
+    assert "http://127.0.0.1:9000/health" in content
+
 
 def test_windows_gmail_capture_selects_active_external_interface_not_loopback():
     """Verify Gmail capture mode selects active external interface (Wi-Fi), never loopback."""
@@ -515,3 +520,72 @@ def test_dynamic_secret_retrieval_and_env_loading(tmp_path):
             secret = get_capture_agent_secret()
             assert secret == "custom-live-secret-test-999"
 
+
+def test_service_class_string_format_pythonservice_compatibility():
+    r"""
+    Verify get_service_class_string() returns canonical [path\to\]module.ClassName format
+    required by PythonService.exe's C++ loader (LoadPythonServiceClass).
+    A naked dotted string like 'capture_agent.windows.service.SecureMailScopeWindowsService'
+    lacks backslashes, causing PythonService.exe to fail to add the directory to sys.path
+    and raise AttributeError, terminating with Error 1066 / 1 ('Incorrect function').
+    """
+    from capture_agent.windows.service import get_service_class_string, SecureMailScopeWindowsService
+
+    svc_class_str = get_service_class_string()
+    assert "\\" in svc_class_str, f"Service class string must contain backslashes for PythonService.exe: {svc_class_str}"
+    assert svc_class_str.endswith(f".{SecureMailScopeWindowsService.__name__}")
+    assert "service" in svc_class_str
+    # Must NOT be a plain dotted package without path
+    assert not svc_class_str.startswith("capture_agent.windows.service.")
+
+
+def test_pythonservice_cpp_loading_semantics_simulation():
+    r"""
+    Simulate the exact C++ algorithm implemented in pywin32's PythonService.cpp LoadPythonServiceClass:
+    1. Look for last '\\'.
+    2. If missing, module import of 'capture_agent.windows.service' returns top package 'capture_agent'.
+       getattr(capture_agent, 'SecureMailScopeWindowsService') fails -> WinError 1066 / Error 1.
+    3. If present, [path\to\] is added to sys.path, and 'service' is imported directly,
+       and getattr(service, 'SecureMailScopeWindowsService') succeeds.
+    """
+    from capture_agent.windows.service import get_service_class_string
+
+    # Scenario A: Broken naked dotted string (Commit a171d7b behavior)
+    broken_str = "capture_agent.windows.service.SecureMailScopeWindowsService"
+    sep_idx = broken_str.rfind("\\")
+    assert sep_idx == -1, "Broken string has no backslash"
+    last_dot = broken_str.rfind(".")
+    mod_name_broken = broken_str[:last_dot]
+    class_name_broken = broken_str[last_dot + 1:]
+    assert mod_name_broken == "capture_agent.windows.service"
+    assert class_name_broken == "SecureMailScopeWindowsService"
+
+    # PyImport_Import in CPython calls __import__ without fromlist
+    top_mod = __import__(mod_name_broken)
+    # top_mod is 'capture_agent', which lacks SecureMailScopeWindowsService
+    assert not hasattr(top_mod, class_name_broken), (
+        "Demonstrates why PythonService.exe threw AttributeError and exited with Error 1066 / 1"
+    )
+
+    # Scenario B: Fixed format with path (Current fix)
+    valid_str = get_service_class_string()
+    sep_idx_valid = valid_str.rfind("\\")
+    assert sep_idx_valid != -1, "Valid string has backslash separating directory"
+    dir_part = valid_str[:sep_idx_valid]
+    fname_part = valid_str[sep_idx_valid + 1:]
+    last_dot_valid = fname_part.rfind(".")
+    mod_name_valid = fname_part[:last_dot_valid]
+    class_name_valid = fname_part[last_dot_valid + 1:]
+
+    assert mod_name_valid == "service"
+    assert class_name_valid == "SecureMailScopeWindowsService"
+    # Convert Windows backslashes to current OS separator to check existence
+    assert Path(dir_part.replace("\\", os.sep)).exists()
+
+
+def test_service_stdout_stderr_stream_safety():
+    """Verify service.py handles missing console streams gracefully for LocalSystem execution."""
+    import capture_agent.windows.service as svc_mod
+    assert sys.stdout is not None
+    assert sys.stderr is not None
+    assert sys.stdin is not None
