@@ -167,7 +167,7 @@ def test_inno_setup_script_configuration():
     content = iss_path.read_text(encoding="utf-8")
 
     # Installer metadata and binary name
-    assert "OutputBaseFilename=SecureMailScopeCaptureAgent-1.0.1-Setup" in content
+    assert "OutputBaseFilename=SecureMailScopeCaptureAgent-1.0.2-Setup" in content
     assert "PrivilegesRequired=admin" in content
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in content
 
@@ -233,7 +233,7 @@ def test_build_installer_script_validation():
     assert "official_npcap_hashes.txt" in content
 
     # Output verification and fail-closed handling
-    assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in content
+    assert "SecureMailScopeCaptureAgent-1.0.2-Setup.exe" in content
     assert "exit /b 1" in content
 
     # Ensure no echo statements inside blocks contain unquoted/unescaped parentheses
@@ -321,11 +321,11 @@ def test_github_actions_windows_workflow_structure():
     # Build and dependencies
     assert "choco install innosetup" in content
     assert "build_installer.bat" in content
-    assert "dist/SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in content
+    assert "dist/SecureMailScopeCaptureAgent-1.0.2-Setup.exe" in content
 
     # Validation and artifacts
     assert "actions/upload-artifact" in content
-    assert "SecureMailScopeCaptureAgent-1.0.1-Setup" in content
+    assert "SecureMailScopeCaptureAgent-1.0.2-Setup" in content
     assert "gh release upload" in content or "gh release create" in content
 
     # Live SCM Lifecycle validation

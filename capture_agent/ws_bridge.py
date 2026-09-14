@@ -391,7 +391,7 @@ class WebSocketBridge:
             health = {
                 "type": "health",
                 "status": "OK",
-                "version": "1.0.1",
+                "version": "1.0.2",
                 "os": get_current_os(),
                 "interface": detect_loopback_interface(),
                 "tcpdump_path": get_tcpdump_binary(),

@@ -318,7 +318,7 @@ async def agent_status_endpoint(request: Request, client_os: Optional[str] = Que
 
 
 GITHUB_RELEASE_DOWNLOAD_BASE = "https://github.com/saravana-rr0411/SecureMailScope/releases/latest/download"
-WINDOWS_INSTALLER_FILENAME = "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+WINDOWS_INSTALLER_FILENAME = "SecureMailScopeCaptureAgent-1.0.2-Setup.exe"
 MACOS_INSTALLER_FILENAME = "SecureMailScopeCaptureAgent-1.0.0.pkg"
 
 

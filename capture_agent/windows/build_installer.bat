@@ -1,13 +1,13 @@
 @echo off
 rem ==============================================================================
 rem SecureMailScope Local Capture Agent - Windows Installer Build Script
-rem Builds SecureMailScopeCaptureAgent-1.0.1-Setup.exe using Inno Setup Compiler
+rem Builds SecureMailScopeCaptureAgent-1.0.2-Setup.exe using Inno Setup Compiler
 rem ==============================================================================
 
 setlocal enabledelayedexpansion
 
 echo ===========================================================================
-echo   Building Windows Installer: SecureMailScope Capture Agent (v1.0.1)
+echo   Building Windows Installer: SecureMailScope Capture Agent (v1.0.2)
 echo ===========================================================================
 
 set "SCRIPT_DIR=%~dp0"
@@ -131,9 +131,9 @@ rem ---------------------------------------------------------------------------
 if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
 mkdir "%BUILD_DIR%"
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
-if exist "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.1-Setup.exe" (
+if exist "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.2-Setup.exe" (
     echo [*] Removing stale installer artifact before clean build...
-    del /q /f "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.1-Setup.exe" >nul 2>&1
+    del /q /f "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.2-Setup.exe" >nul 2>&1
 )
 
 rem ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 
-set "OUTPUT_INSTALLER=%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+set "OUTPUT_INSTALLER=%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.2-Setup.exe"
 if not exist "!OUTPUT_INSTALLER!" (
     echo [-] Error: Expected installer output file not found: !OUTPUT_INSTALLER!
     exit /b 1

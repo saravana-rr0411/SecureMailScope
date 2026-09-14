@@ -205,9 +205,9 @@ def test_download_agent_package_endpoints():
     resp_win = client.get("/api/agent/download/windows", follow_redirects=False)
     assert resp_win.status_code in (200, 307)
     if resp_win.status_code == 200:
-        assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in resp_win.headers.get("content-disposition", "")
+        assert "SecureMailScopeCaptureAgent-1.0.2-Setup.exe" in resp_win.headers.get("content-disposition", "")
     elif resp_win.status_code == 307:
-        assert "SecureMailScopeCaptureAgent-1.0.1-Setup.exe" in resp_win.headers.get("location", "")
+        assert "SecureMailScopeCaptureAgent-1.0.2-Setup.exe" in resp_win.headers.get("location", "")
 
     # Invalid platform returns 400
     resp_invalid = client.get("/api/agent/download/solaris")
@@ -218,7 +218,7 @@ def test_download_windows_agent_local_serving():
     """Verify Windows installer is served directly as attachment when present in dist/."""
     from pathlib import Path
     dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
-    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.2-Setup.exe"
     created = False
     try:
         if not exe_path.exists():
@@ -229,7 +229,7 @@ def test_download_windows_agent_local_serving():
         resp = client.get("/api/agent/download/windows")
         assert resp.status_code == 200
         assert "application/vnd.microsoft.portable-executable" in resp.headers["content-type"]
-        assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"' in resp.headers["content-disposition"]
+        assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.2-Setup.exe"' in resp.headers["content-disposition"]
         assert len(resp.content) >= 2002
     finally:
         if created and exe_path.exists():
@@ -241,7 +241,7 @@ def test_download_windows_agent_streaming_cache():
     from pathlib import Path
     import unittest.mock as mock
     dist_dir = Path(__file__).resolve().parent.parent.parent / "dist"
-    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.1-Setup.exe"
+    exe_path = dist_dir / "SecureMailScopeCaptureAgent-1.0.2-Setup.exe"
 
     backed_up = None
     if exe_path.exists():
@@ -274,7 +274,7 @@ def test_download_windows_agent_streaming_cache():
             resp = client.get("/api/agent/download/windows")
             assert resp.status_code == 200
             assert "application/vnd.microsoft.portable-executable" in resp.headers["content-type"]
-            assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.1-Setup.exe"' in resp.headers["content-disposition"]
+            assert 'attachment; filename="SecureMailScopeCaptureAgent-1.0.2-Setup.exe"' in resp.headers["content-disposition"]
             assert resp.content == fake_payload
             assert exe_path.exists()
             assert exe_path.read_bytes() == fake_payload

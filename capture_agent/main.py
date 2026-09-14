@@ -85,7 +85,7 @@ async def lifespan(app):
 app = FastAPI(
     title="SecureMailScope Capture Agent",
     description="Dedicated user-local background agent for authentic packet capture of real email traffic",
-    version="1.0.1",
+    version="1.0.2",
     lifespan=lifespan,
 )
 
@@ -303,7 +303,7 @@ def health_check():
     return {
         "status": "OK",
         "agent": "SecureMailScope Capture Agent",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "os": get_current_os(),
         "interface": detect_loopback_interface(),
         "tcpdump_path": get_tcpdump_binary(),
