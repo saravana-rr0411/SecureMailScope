@@ -337,7 +337,8 @@ async def download_agent_package(platform_name: str):
     if target in ("win", "windows", "exe"):
         filename = WINDOWS_INSTALLER_FILENAME
         exe_path = dist_dir / filename
-        if exe_path.exists() and exe_path.stat().st_size > 1000:
+        # If local cached binary exists and is valid (> 1MB), serve it immediately
+        if exe_path.exists() and exe_path.stat().st_size > 1048576:
             return FileResponse(
                 path=str(exe_path),
                 media_type="application/vnd.microsoft.portable-executable",
@@ -350,37 +351,38 @@ async def download_agent_package(platform_name: str):
             f"{GITHUB_RELEASE_DOWNLOAD_BASE}/{filename}"
         )
 
-        # Attempt to stream the binary from remote release/storage directly to the client
-        # and cache it in dist/, so the user downloads the .exe directly without ever
-        # having to navigate to GitHub.
-        if os.environ.get("STREAM_AGENT_INSTALLER", "1").lower() in ("1", "true", "yes"):
-            try:
-                import httpx
-                async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=10.0)) as http_client:
-                    async with http_client.stream("GET", remote_url) as stream_resp:
-                        if stream_resp.status_code == 200:
-                            dist_dir.mkdir(parents=True, exist_ok=True)
-                            temp_path = dist_dir / f"{filename}.tmp"
-                            with open(temp_path, "wb") as f:
-                                async for chunk in stream_resp.aiter_bytes(chunk_size=65536):
-                                    f.write(chunk)
-                            if temp_path.stat().st_size > 1000:
-                                temp_path.replace(exe_path)
-                                return FileResponse(
-                                    path=str(exe_path),
-                                    media_type="application/vnd.microsoft.portable-executable",
-                                    filename=filename,
-                                    headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-                                )
-                            else:
-                                if temp_path.exists():
-                                    temp_path.unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning(f"Could not stream Windows installer from {remote_url}: {e}")
+        # In cloud environments (e.g. Render / Heroku / Container), avoid buffering 60MB+ on
+        # ephemeral disks which frequently leads to gateway timeouts, partial writes, and 0-byte files.
+        # Direct 302 redirect ensures fast, reliable, full-speed download directly from GitHub / Azure CDN.
+        if os.environ.get("STREAM_AGENT_INSTALLER", "1").lower() not in ("1", "true", "yes"):
+            return RedirectResponse(url=remote_url, status_code=302)
+
+        # Optional streaming mode with validation:
+        try:
+            import httpx
+            async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=10.0)) as http_client:
+                async with http_client.stream("GET", remote_url) as stream_resp:
+                    if stream_resp.status_code == 200:
+                        dist_dir.mkdir(parents=True, exist_ok=True)
+                        temp_path = dist_dir / f"{filename}.tmp"
+                        with open(temp_path, "wb") as f:
+                            async for chunk in stream_resp.aiter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                        if temp_path.stat().st_size > 1000:
+                            temp_path.replace(exe_path)
+                            return FileResponse(
+                                path=str(exe_path),
+                                media_type="application/vnd.microsoft.portable-executable",
+                                filename=filename,
+                                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+                            )
+                        temp_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not stream Windows installer from {remote_url}: {e}")
 
         return RedirectResponse(
             url=remote_url,
-            status_code=307
+            status_code=302
         )
 
     if target in ("mac", "macos", "darwin", "pkg"):

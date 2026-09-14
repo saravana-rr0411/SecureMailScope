@@ -48,14 +48,21 @@ Name: "{commonappdata}\SecureMailScope\CaptureAgent\storage"; Permissions: users
 Name: "{commonappdata}\SecureMailScope\CaptureAgent\logs"; Permissions: users-modify
 
 [Run]
-; Check / register the Windows Service upon install
-Filename: "{code:GetPythonExe}"; Parameters: """{app}\capture_agent\windows\service.py"" --startup=auto install"; Flags: runhidden waituntilterminated; Check: IsNpcapInstalled
-Filename: "sc.exe"; Parameters: "start {#MyServiceName}"; Flags: runhidden waituntilterminated; Check: IsNpcapInstalled
+; 1. Allow inbound localhost communication through Windows Defender Firewall if needed
+Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""SecureMailScope Capture Agent"" dir=in action=allow protocol=TCP localport=9000 profile=any"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated
+
+; 2. Register the Windows Service upon install
+Filename: "{code:GetPythonExe}"; Parameters: """{app}\capture_agent\windows\service.py"" --startup=auto install"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: IsNpcapInstalled
+
+; 3. Start the Windows Service
+Filename: "sc.exe"; Parameters: "start {#MyServiceName}"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: IsNpcapInstalled
 
 [UninstallRun]
 ; Stop and remove the Windows Service cleanly
-Filename: "sc.exe"; Parameters: "stop {#MyServiceName}"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
-Filename: "{code:GetPythonExe}"; Parameters: """{app}\capture_agent\windows\service.py"" remove"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
+Filename: "sc.exe"; Parameters: "stop {#MyServiceName}"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
+Filename: "{code:GetPythonExe}"; Parameters: """{app}\capture_agent\windows\service.py"" remove"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
+Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""SecureMailScope Capture Agent"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRule"
+
 
 [Code]
 // Helper function to resolve Python executable in {app}\venv, {app}\python.exe, or system PATH
@@ -203,17 +210,72 @@ begin
   end;
 end;
 
-// Post-installation verification: Verify service is healthy on port 9000
+// Post-installation verification & environment configuration
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Attempts: Integer;
   IsHealthy: Boolean;
+  ServiceExists: Boolean;
   WinHttpReq: Variant;
+  EnvFilePath: String;
+  EnvContent: TArrayOfString;
+  DataDirPath: String;
+  ResultCode: Integer;
+  LogFilePath: String;
 begin
+  if CurStep = ssPostInstall then
+  begin
+    // 1. Ensure ProgramData directories exist before writing agent.env
+    DataDirPath := ExpandConstant('{commonappdata}\SecureMailScope\CaptureAgent');
+    ForceDirectories(DataDirPath);
+    ForceDirectories(DataDirPath + '\logs');
+    ForceDirectories(DataDirPath + '\storage');
+
+    // 2. Provision agent.env if it doesn't already exist
+    EnvFilePath := DataDirPath + '\agent.env';
+    if not FileExists(EnvFilePath) then
+    begin
+      SetArrayLength(EnvContent, 4);
+      EnvContent[0] := '# SecureMailScope Windows Capture Agent Configuration';
+      EnvContent[1] := 'BACKEND_WS_URL=wss://securemailscope-130k.onrender.com/ws/agent';
+      EnvContent[2] := 'CAPTURE_AGENT_SECRET_KEY=sms-capture-secret-dev-key';
+      EnvContent[3] := 'CAPTURE_AGENT_API_KEY=sms-capture-secret-dev-key';
+      SaveStringsToUTF8File(EnvFilePath, EnvContent, False);
+    end;
+  end;
+
   if CurStep = ssDone then
   begin
+    LogFilePath := ExpandConstant('{commonappdata}\SecureMailScope\CaptureAgent\logs\service.log');
+
+    // Check if Npcap is installed; if not, service registration was skipped by Check: IsNpcapInstalled
+    if not IsNpcapInstalled() then
+    begin
+      Exit;
+    end;
+
+    // Verify service actually exists in Windows Service Control Manager (SCM)
+    ResultCode := -1;
+    ServiceExists := Exec(ExpandConstant('{sys}\sc.exe'), 'query {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+
+    if not ServiceExists then
+    begin
+      MsgBox('Service Registration Error: SecureMailScope Capture Agent service was NOT registered in Windows Service Control Manager.' + #13#10 + #13#10 +
+             'Exit code from sc.exe query: ' + IntToStr(ResultCode) + #13#10 + #13#10 +
+             'Please inspect the service log file at:' + #13#10 +
+             LogFilePath + #13#10 + #13#10 +
+             'You can inspect registration errors by opening an Administrator Command Prompt and running:' + #13#10 +
+             GetPythonExe('') + ' "' + ExpandConstant('{app}\capture_agent\windows\service.py') + '" --startup=auto install',
+             mbCriticalError, MB_OK);
+      Exit;
+    end;
+
+    // Service exists in SCM. Ensure it is triggered to start if not already running.
+    Exec(ExpandConstant('{sys}\sc.exe'), 'start {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+    // Wait for the service to initialize and respond to health checks
     IsHealthy := False;
-    for Attempts := 1 to 10 do
+    for Attempts := 1 to 15 do
     begin
       try
         WinHttpReq := CreateOleObject('WinHttp.WinHttpRequest.5.1');
@@ -232,11 +294,13 @@ begin
 
     if not IsHealthy then
     begin
-      MsgBox('SecureMailScope Capture Agent service was registered, but the health check at http://127.0.0.1:9000/health did not respond within 10 seconds.' + #13#10 + #13#10 +
+      MsgBox('SecureMailScope Capture Agent service is registered in Windows Service Manager, but the health check at http://127.0.0.1:9000/health did not respond within 15 seconds.' + #13#10 + #13#10 +
+             'The service may still be starting or initializing dependencies.' + #13#10 + #13#10 +
              'Please check the service log file at:' + #13#10 +
-             ExpandConstant('{commonappdata}\SecureMailScope\CaptureAgent\logs\service.log') + #13#10 + #13#10 +
-             'You can inspect or start the service using: sc.exe query SecureMailScopeCaptureAgent',
+             LogFilePath + #13#10 + #13#10 +
+             'You can inspect the service state using: sc.exe query {#MyServiceName}',
              mbError, MB_OK);
     end;
   end;
 end;
+

@@ -178,7 +178,7 @@ def test_inno_setup_script_configuration():
 
     # Windows Service name and execution
     assert 'MyServiceName "SecureMailScopeCaptureAgent"' in content
-    assert 'service.py"" --startup=auto install' in content
+    assert 'service.py"' in content and "install" in content and "--startup=auto" in content
     assert 'sc.exe"; Parameters: "start {#MyServiceName}"' in content
     assert 'sc.exe"; Parameters: "stop {#MyServiceName}"' in content
     assert 'service.py"" remove' in content
@@ -374,3 +374,137 @@ def test_windows_gmail_bpf_filter_preserves_ipv6_and_ipv4():
             from scapy.arch.bpf.core import compile_filter
             compiled = compile_filter(bpf, linktype=1)
             assert compiled.bf_len > 0
+
+
+def test_normalize_service_argv():
+    """Verify normalize_service_argv places all option flags before verbs for pywin32 getopt compatibility."""
+    from capture_agent.windows.service import normalize_service_argv
+
+    # Case 1: Standard Inno Setup / CMD invocation: install --startup=auto
+    argv1 = ["service.py", "install", "--startup=auto"]
+    assert normalize_service_argv(argv1) == ["service.py", "--startup=auto", "install"]
+
+    # Case 2: Inverted invocation: --startup=auto install
+    argv2 = ["service.py", "--startup=auto", "install"]
+    assert normalize_service_argv(argv2) == ["service.py", "--startup=auto", "install"]
+
+    # Case 3: Multiple options
+    argv3 = ["service.py", "install", "--startup=auto", "-user", "LocalSystem"]
+    assert normalize_service_argv(argv3) == ["service.py", "--startup=auto", "-user", "LocalSystem", "install"]
+
+    # Case 4: Simple verb
+    argv4 = ["service.py", "remove"]
+    assert normalize_service_argv(argv4) == ["service.py", "remove"]
+
+    # Case 5: Empty or single-element argv
+    assert normalize_service_argv(["service.py"]) == ["service.py"]
+    assert normalize_service_argv([]) == []
+
+
+def test_win32_verbs_coverage():
+    """Verify WIN32_VERBS contains all standard pywin32 service management actions."""
+    from capture_agent.windows.service import WIN32_VERBS
+
+    expected_verbs = {"install", "start", "stop", "restart", "remove", "update", "status", "debug"}
+    assert expected_verbs.issubset(WIN32_VERBS)
+
+
+def test_service_host_exe_resolution(tmp_path):
+    """Verify get_service_host_exe locates PythonService.exe in runtime prefix or site-packages."""
+    from capture_agent.windows.service import get_service_host_exe
+
+    # Case 1: PythonService.exe directly in sys.exec_prefix
+    fake_exe = tmp_path / "PythonService.exe"
+    fake_exe.touch()
+    with patch("sys.exec_prefix", str(tmp_path)):
+        host = get_service_host_exe()
+        assert host == str(fake_exe)
+
+    # Case 2: pythonservice.exe (lowercase) in sys.exec_prefix
+    fake_exe.unlink()
+    fake_exe_lower = tmp_path / "pythonservice.exe"
+    fake_exe_lower.touch()
+    with patch("sys.exec_prefix", str(tmp_path)):
+        host = get_service_host_exe()
+        assert Path(host).name.lower() == "pythonservice.exe"
+
+    # Case 3: In site-packages/win32
+    fake_exe_lower.unlink()
+    sp_dir = tmp_path / "Lib" / "site-packages" / "win32"
+    sp_dir.mkdir(parents=True)
+    sp_exe = sp_dir / "PythonService.exe"
+    sp_exe.touch()
+    with patch("sys.exec_prefix", str(tmp_path)):
+        host = get_service_host_exe()
+        assert host == str(sp_exe)
+
+    # Case 4: None when not found
+    sp_exe.unlink()
+    with patch("sys.exec_prefix", str(tmp_path)):
+        assert get_service_host_exe() is None
+
+
+def test_inno_setup_scm_verification_and_agent_env():
+    """Verify Inno Setup script provisions agent.env in ssPostInstall and validates SCM service existence."""
+    iss_path = Path(__file__).resolve().parent.parent / "windows" / "inno_setup.iss"
+    content = iss_path.read_text(encoding="utf-8")
+
+    # Post-install agent.env provisioning
+    assert "if CurStep = ssPostInstall then" in content
+    assert "ForceDirectories(DataDirPath);" in content
+    assert "BACKEND_WS_URL=wss://securemailscope-130k.onrender.com/ws/agent" in content
+    assert "CAPTURE_AGENT_SECRET_KEY=sms-capture-secret-dev-key" in content
+    assert "CAPTURE_AGENT_API_KEY=sms-capture-secret-dev-key" in content
+
+    # SCM validation before health check
+    assert "sc.exe" in content
+    assert "query {#MyServiceName}" in content
+    assert "Service Registration Error:" in content
+    assert "NOT registered in Windows Service Control Manager" in content
+
+    # Health check after SCM confirmation
+    assert "start {#MyServiceName}" in content
+    assert "http://127.0.0.1:9000/health" in content
+    assert "Attempts := 1 to 15" in content
+
+
+def test_build_installer_pythonservice_staging_and_clean_build():
+    """Verify build_installer.bat contains PythonService staging, clean build, and asset verification."""
+    bat_path = Path(__file__).resolve().parent.parent / "windows" / "build_installer.bat"
+    content = bat_path.read_text(encoding="utf-8")
+
+    # Clean build
+    assert "Removing stale installer artifact before clean build" in content
+    assert "del /q /f" in content
+
+    # Staging verification of core assets
+    assert "Required staged file missing: service.py" in content
+    assert "Required staged file missing: config.py" in content
+    assert "Required staged file missing: main.py" in content
+    assert "Required staged file missing: ws_bridge.py" in content
+
+    # PythonService.exe and pywin32 staging
+    assert "PythonService.exe" in content
+    assert "pythonservice.exe" in content
+    assert "pywintypes*.dll" in content
+    assert "pythoncom*.dll" in content
+    assert "Verified PythonService host binary confirmed present." in content
+
+
+def test_dynamic_secret_retrieval_and_env_loading(tmp_path):
+    """Verify get_capture_agent_secret dynamically reloads credentials from agent.env."""
+    from capture_agent.config import get_capture_agent_secret
+
+    env_dir = tmp_path / "SecureMailScope" / "CaptureAgent"
+    env_dir.mkdir(parents=True)
+    env_file = env_dir / "agent.env"
+    env_file.write_text("CAPTURE_AGENT_SECRET_KEY=custom-live-secret-test-999\n", encoding="utf-8")
+
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("CAPTURE_AGENT_SECRET_KEY", "CAPTURE_AGENT_API_KEY")}
+    clean_env["PROGRAMDATA"] = str(tmp_path)
+
+    with patch("platform.system", return_value="Windows"):
+        with patch.dict(os.environ, clean_env, clear=True):
+            secret = get_capture_agent_secret()
+            assert secret == "custom-live-secret-test-999"
+

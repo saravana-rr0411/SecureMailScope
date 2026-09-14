@@ -126,11 +126,15 @@ if exist "%NPCAP_EXE%" (
 )
 
 rem ---------------------------------------------------------------------------
-rem 5. Prepare build and dist directories
+rem 5. Prepare build and dist directories (Clean Build)
 rem ---------------------------------------------------------------------------
 if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
 mkdir "%BUILD_DIR%"
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
+if exist "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.1-Setup.exe" (
+    echo [*] Removing stale installer artifact before clean build...
+    del /q /f "%DIST_DIR%\SecureMailScopeCaptureAgent-1.0.1-Setup.exe" >nul 2>&1
+)
 
 rem ---------------------------------------------------------------------------
 rem 6. Copy application package source files into build directory
@@ -138,6 +142,25 @@ rem ---------------------------------------------------------------------------
 echo [*] Copying capture_agent package source files...
 mkdir "%BUILD_DIR%\capture_agent"
 robocopy "%PROJECT_ROOT%\capture_agent" "%BUILD_DIR%\capture_agent" /E /XD __pycache__ tests storage macos .pytest_cache vendor /XF *.pyc >nul
+
+rem Verify core staged source files exist (Fail Closed)
+if not exist "%BUILD_DIR%\capture_agent\windows\service.py" (
+    echo [-] Error: Required staged file missing: service.py
+    exit /b 1
+)
+if not exist "%BUILD_DIR%\capture_agent\config.py" (
+    echo [-] Error: Required staged file missing: config.py
+    exit /b 1
+)
+if not exist "%BUILD_DIR%\capture_agent\main.py" (
+    echo [-] Error: Required staged file missing: main.py
+    exit /b 1
+)
+if not exist "%BUILD_DIR%\capture_agent\ws_bridge.py" (
+    echo [-] Error: Required staged file missing: ws_bridge.py
+    exit /b 1
+)
+echo [+] Verified fresh staged assets: service.py, config.py, main.py, ws_bridge.py.
 
 echo [*] Packaging python requirements...
 copy "%PROJECT_ROOT%\capture_agent\requirements.txt" "%BUILD_DIR%\" >nul
@@ -208,7 +231,25 @@ if exist "%BUILD_DIR%\python\Scripts\pywin32_postinstall.py" (
     "!STAGED_PYTHON!" "%BUILD_DIR%\python\Scripts\pywin32_postinstall.py" -install -quiet >nul 2>&1
 )
 if exist "%BUILD_DIR%\python\Lib\site-packages\pywin32_system32" (
-    copy "%BUILD_DIR%\python\Lib\site-packages\pywin32_system32\*.dll" "%BUILD_DIR%\python\" >nul 2>&1
+    copy /y "%BUILD_DIR%\python\Lib\site-packages\pywin32_system32\*.dll" "%BUILD_DIR%\python\" >nul 2>&1
+)
+
+echo [*] Staging PythonService.exe and pywin32 service host binaries...
+if exist "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" (
+    copy /y "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" "%BUILD_DIR%\python\PythonService.exe" >nul 2>&1
+    copy /y "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" "%BUILD_DIR%\python\pythonservice.exe" >nul 2>&1
+    echo [+] Staged PythonService.exe from site-packages\win32
+)
+if exist "%BUILD_DIR%\python\Scripts\PythonService.exe" (
+    copy /y "%BUILD_DIR%\python\Scripts\PythonService.exe" "%BUILD_DIR%\python\PythonService.exe" >nul 2>&1
+    copy /y "%BUILD_DIR%\python\Scripts\PythonService.exe" "%BUILD_DIR%\python\pythonservice.exe" >nul 2>&1
+    echo [+] Staged PythonService.exe from Scripts
+)
+if exist "%BUILD_DIR%\python\Lib\site-packages\win32\pywintypes*.dll" (
+    copy /y "%BUILD_DIR%\python\Lib\site-packages\win32\pywintypes*.dll" "%BUILD_DIR%\python\" >nul 2>&1
+)
+if exist "%BUILD_DIR%\python\Lib\site-packages\win32\pythoncom*.dll" (
+    copy /y "%BUILD_DIR%\python\Lib\site-packages\win32\pythoncom*.dll" "%BUILD_DIR%\python\" >nul 2>&1
 )
 
 echo [*] Verifying staged Python runtime dependencies...
@@ -217,6 +258,14 @@ if !errorlevel! neq 0 (
     echo [-] Error: Staged Python environment failed dependency verification.
     exit /b 1
 )
+
+if not exist "%BUILD_DIR%\python\PythonService.exe" if not exist "%BUILD_DIR%\python\pythonservice.exe" (
+    if not exist "%BUILD_DIR%\python\Lib\site-packages\win32\PythonService.exe" (
+        echo [-] Error: pywin32 service host binary (PythonService.exe) missing from staged environment!
+        exit /b 1
+    )
+)
+echo [+] Verified PythonService host binary confirmed present.
 echo [+] Self-contained Python runtime prepared successfully.
 
 rem Create virtualenv alias for backward compatibility with existing configs

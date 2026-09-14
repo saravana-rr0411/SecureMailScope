@@ -40,9 +40,50 @@ except ImportError:
     WIN32_AVAILABLE = False
 
 
+from typing import Optional
+
+WIN32_VERBS = {"install", "start", "stop", "restart", "remove", "update", "status", "debug"}
+
+
+def normalize_service_argv(argv: list) -> list:
+    """
+    Ensure all option flags and parameters appear before win32 verbs
+    so that win32serviceutil's internal getopt.getopt parses them correctly without terminating early.
+    """
+    if len(argv) <= 1:
+        return list(argv)
+    script = argv[0]
+    args = list(argv[1:])
+    verbs = []
+    options_and_params = []
+    for a in args:
+        if a.lower() in WIN32_VERBS:
+            verbs.append(a)
+        else:
+            options_and_params.append(a)
+    return [script] + options_and_params + verbs
+
+
+def get_service_host_exe() -> Optional[str]:
+    """Locate the PythonService.exe host binary in the Python runtime directory."""
+    exec_prefix = Path(sys.exec_prefix)
+    for name in ("PythonService.exe", "pythonservice.exe"):
+        candidate = exec_prefix / name
+        if candidate.is_file():
+            return str(candidate)
+    # Check site-packages/win32
+    sp_win32 = exec_prefix / "Lib" / "site-packages" / "win32"
+    for name in ("PythonService.exe", "pythonservice.exe"):
+        candidate = sp_win32 / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def run_agent_server(stop_event: threading.Event):
     """Runs Uvicorn server in worker thread."""
     try:
+        load_service_env()
         import uvicorn
         from capture_agent.main import app
 
@@ -77,7 +118,7 @@ def load_service_env() -> bool:
     if env_file.exists():
         try:
             from dotenv import load_dotenv
-            load_dotenv(dotenv_path=str(env_file))
+            load_dotenv(dotenv_path=str(env_file), override=True)
             logger.info("Loaded credentials from agent.env")
             return True
         except Exception as env_err:
@@ -97,6 +138,10 @@ class SecureMailScopeWindowsService(BaseServiceFramework):
     _svc_name_ = SERVICE_NAME
     _svc_display_name_ = SERVICE_DISPLAY_NAME
     _svc_description_ = SERVICE_DESCRIPTION
+
+    _host_exe = get_service_host_exe()
+    if _host_exe:
+        _exe_name_ = _host_exe
 
     def __init__(self, args):
         super().__init__(args)
@@ -142,6 +187,7 @@ class SecureMailScopeWindowsService(BaseServiceFramework):
 def standalone_main():
     """Fallback runner for CLI debugging or non-service execution on Windows."""
     logger.info("Running Capture Agent in standalone CLI mode...")
+    load_service_env()
     stop_event = threading.Event()
     try:
         run_agent_server(stop_event)
@@ -151,11 +197,44 @@ def standalone_main():
 
 
 if __name__ == "__main__":
-    if WIN32_AVAILABLE and len(sys.argv) > 1 and sys.argv[1] in ("install", "start", "stop", "restart", "remove", "update"):
-        win32serviceutil.HandleCommandLine(SecureMailScopeWindowsService)
+    load_service_env()
+
+    # Case 1: Invoked by SCM with no command-line arguments
+    if len(sys.argv) == 1:
+        if WIN32_AVAILABLE:
+            try:
+                servicemanager.Initialize()
+                servicemanager.PrepareToHostSingle(SecureMailScopeWindowsService)
+                servicemanager.StartServiceCtrlDispatcher()
+            except Exception as e:
+                # If run interactively from console with no arguments, dispatcher connection fails (error 1063)
+                logger.info(f"Interactive execution detected (SCM dispatcher not active: {e}); running in standalone mode.")
+                standalone_main()
+        else:
+            standalone_main()
+
+    # Case 2: Windows Service management verbs (install, start, stop, remove, etc.)
+    elif WIN32_AVAILABLE and any(arg.lower() in WIN32_VERBS for arg in sys.argv[1:]):
+        normalized_argv = normalize_service_argv(sys.argv)
+        logger.info("Processing service command line: %s", normalized_argv)
+        try:
+            win32serviceutil.HandleCommandLine(
+                SecureMailScopeWindowsService,
+                serviceClassString="capture_agent.windows.service.SecureMailScopeWindowsService",
+                argv=normalized_argv
+            )
+            logger.info("win32serviceutil.HandleCommandLine finished successfully.")
+        except Exception as exc:
+            logger.error("Error executing win32serviceutil.HandleCommandLine: %s", exc, exc_info=True)
+            sys.exit(1)
+
+    # Case 3: Explicit SCM service dispatcher flag
     elif WIN32_AVAILABLE and "--service" in sys.argv:
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(SecureMailScopeWindowsService)
         servicemanager.StartServiceCtrlDispatcher()
+
+    # Case 4: Standalone / debugging execution
     else:
         standalone_main()
+

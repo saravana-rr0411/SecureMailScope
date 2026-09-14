@@ -52,15 +52,20 @@ logger = logging.getLogger("capture_agent")
 async def lifespan(app):
     """Manage WebSocket Bridge lifecycle."""
     from capture_agent.ws_bridge import start_ws_bridge, stop_ws_bridge
-    if BACKEND_WS_URL and CAPTURE_AGENT_SECRET_KEY:
-        logger.info(f"Starting WebSocket bridge to {BACKEND_WS_URL}...")
+    from capture_agent.config import get_capture_agent_secret
+
+    secret = get_capture_agent_secret()
+    backend_url = os.environ.get("BACKEND_WS_URL", BACKEND_WS_URL)
+
+    if backend_url and secret:
+        logger.info(f"Starting WebSocket bridge to {backend_url}...")
         await start_ws_bridge(
-            backend_ws_url=BACKEND_WS_URL,
-            api_key=CAPTURE_AGENT_SECRET_KEY,
+            backend_ws_url=backend_url,
+            api_key=secret,
             heartbeat_interval=WS_HEARTBEAT_INTERVAL,
             reconnect_max_delay=WS_RECONNECT_MAX_DELAY,
         )
-    elif not CAPTURE_AGENT_SECRET_KEY:
+    elif not secret:
         logger.info("WebSocket bridge disabled: CAPTURE_AGENT_SECRET_KEY not configured.")
     else:
         logger.info("WebSocket bridge disabled: BACKEND_WS_URL not configured.")
@@ -72,7 +77,7 @@ async def lifespan(app):
 app = FastAPI(
     title="SecureMailScope Capture Agent",
     description="Dedicated user-local background agent for authentic packet capture of real email traffic",
-    version="1.0.0",
+    version="1.0.1",
     lifespan=lifespan,
 )
 
@@ -260,7 +265,8 @@ async def verify_bearer_auth(authorization: Optional[str] = Header(None)) -> str
         return provided_token
 
     # Check 2: Try verifying against server secret key (constant-time comparison)
-    expected_secret = CAPTURE_AGENT_SECRET_KEY.strip()
+    from capture_agent.config import get_capture_agent_secret
+    expected_secret = get_capture_agent_secret()
     if expected_secret and hmac.compare_digest(provided_token.encode("utf-8"), expected_secret.encode("utf-8")):
         logger.info("Authenticated request via server secret key.")
         return provided_token
@@ -289,7 +295,7 @@ def health_check():
     return {
         "status": "OK",
         "agent": "SecureMailScope Capture Agent",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "os": get_current_os(),
         "interface": detect_loopback_interface(),
         "tcpdump_path": get_tcpdump_binary(),

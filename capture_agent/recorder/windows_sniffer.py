@@ -40,6 +40,10 @@ class WindowsPacketSniffer:
         self._thread: Optional[threading.Thread] = None
         self._pcap_writer: Optional[PcapWriter] = None
         self._packet_count = 0
+        self._ipv4_count = 0
+        self._ipv6_count = 0
+        self._port_587_count = 0
+        self._port_465_count = 0
         self._is_capturing = False
         self._error: Optional[Exception] = None
 
@@ -49,20 +53,35 @@ class WindowsPacketSniffer:
             if self._pcap_writer:
                 self._pcap_writer.write(packet)
                 self._packet_count += 1
+
+                # Safe non-sensitive metrics for diagnostic logging
+                has_ip = packet.haslayer("IP")
+                has_ipv6 = packet.haslayer("IPv6")
+                if has_ip:
+                    self._ipv4_count += 1
+                elif has_ipv6:
+                    self._ipv6_count += 1
+
+                if packet.haslayer("TCP"):
+                    tcp_layer = packet.getlayer("TCP")
+                    sport = getattr(tcp_layer, "sport", 0)
+                    dport = getattr(tcp_layer, "dport", 0)
+                    if 587 in (sport, dport):
+                        self._port_587_count += 1
+                    elif 465 in (sport, dport):
+                        self._port_465_count += 1
         except Exception as e:
             logger.warning(f"Error writing packet to PCAP on Windows: {e}")
 
     def _sniff_worker(self):
-        """Worker thread executing scapy.sniff with Npcap."""
+        """Worker thread executing continuous scapy.sniff with Npcap."""
         try:
             # Prepare directory and PCAP writer
             out_dir = Path(self.output_pcap_path).parent
             out_dir.mkdir(parents=True, exist_ok=True)
-
-            # Standard libpcap format, sync flush enabled
             self._pcap_writer = PcapWriter(
                 self.output_pcap_path,
-                append=False,
+                append=True,
                 sync=True
             )
 
@@ -86,9 +105,23 @@ class WindowsPacketSniffer:
                 f"filter '{self.bpf_filter}', output '{self.output_pcap_path}'"
             )
 
-            # Start sniffing loop; timeout=1.0 per slice allows checking stop_event periodically
+            # Use AsyncSniffer to maintain persistent Npcap handle without packet drop,
+            # and cleanly stop as soon as stop_event is signaled.
+            from scapy.sendrecv import AsyncSniffer
+            sniffer = AsyncSniffer(**sniff_kwargs)
+            sniffer.start()
+
             while not self._stop_event.is_set():
-                sniff(timeout=0.5, **sniff_kwargs)
+                time.sleep(0.05)
+
+            if sniffer.running:
+                sniffer.stop()
+
+            logger.info(
+                f"Windows sniffer finished capture session. Stats: total={self._packet_count}, "
+                f"ipv4={self._ipv4_count}, ipv6={self._ipv6_count}, "
+                f"port587={self._port_587_count}, port465={self._port_465_count}"
+            )
 
         except Exception as e:
             logger.error(f"Windows sniffer worker encountered exception: {e}", exc_info=True)

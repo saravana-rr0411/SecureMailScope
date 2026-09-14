@@ -14,8 +14,37 @@ if platform.system().lower() == "windows" and os.environ.get("PROGRAMDATA"):
 else:
     DEFAULT_STORAGE_DIR = BASE_DIR / "storage"
 
+# Automatically load agent.env from platform standard directory if present
+def _load_env_defaults():
+    candidates = []
+    if platform.system().lower() == "windows":
+        prog_data = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+        candidates.append(Path(prog_data) / "SecureMailScope" / "CaptureAgent" / "agent.env")
+    elif platform.system().lower() == "darwin":
+        candidates.append(Path("/Library/Application Support/SecureMailScope/CaptureAgent/agent.env"))
+    candidates.append(BASE_DIR / "agent.env")
+    candidates.append(BASE_DIR.parent / ".env")
+
+    for cand in candidates:
+        if cand.is_file():
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(dotenv_path=str(cand), override=True)
+            except Exception:
+                pass
+
+_load_env_defaults()
+
+def get_capture_agent_secret() -> str:
+    """Dynamically retrieve the Capture Agent Secret Key, reloading environment if needed."""
+    _load_env_defaults()
+    return os.environ.get(
+        "CAPTURE_AGENT_SECRET_KEY",
+        os.environ.get("CAPTURE_AGENT_API_KEY", "sms-capture-secret-dev-key")
+    ).strip()
+
 # Environment configuration
-CAPTURE_AGENT_SECRET_KEY = os.environ.get("CAPTURE_AGENT_SECRET_KEY", "").strip()
+CAPTURE_AGENT_SECRET_KEY = get_capture_agent_secret()
 AGENT_HOST = os.environ.get("AGENT_HOST", "127.0.0.1")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "9000"))
 LOCAL_ONLY = os.environ.get("CAPTURE_AGENT_LOCAL_ONLY", "true").lower() in ("1", "true", "yes")
@@ -221,12 +250,14 @@ def detect_active_interface() -> str:
             # If mock or command returned a single interface name directly:
             if "\n" not in out and out and "loopback" not in out.lower():
                 return out
+            ignored_prefixes = ("vethernet", "bluetooth", "loopback", "wsl", "vmware", "virtualbox")
             for line in out.splitlines():
                 if "Connected" in line:
                     parts = line.split()
                     if len(parts) >= 4:
                         iface_name = " ".join(parts[3:]).strip()
-                        if iface_name and "loopback" not in iface_name.lower():
+                        lower_name = iface_name.lower()
+                        if iface_name and not any(ign in lower_name for ign in ignored_prefixes):
                             return iface_name
         except Exception:
             pass
