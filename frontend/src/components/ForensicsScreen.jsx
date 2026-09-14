@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { getAiRiskTier, hasConfirmedPlaintextPayload } from '../utils/securityStats';
+import {
+  getAiRiskTier,
+  hasConfirmedPlaintextPayload,
+  getAiRiskExplanation,
+  getAiRiskExplanationStyle
+} from '../utils/securityStats';
 
 const PIPELINE_STAGE_METADATA = {
   1: { num: '01', name: 'PCAP' },
@@ -315,6 +320,10 @@ export default function ForensicsScreen({
     }
   });
 
+  const failedFindingsCount = findingsList.filter(f => f.isFail).length;
+  const aiExplanation = getAiRiskExplanation(aiRisk, postureStatus, failedFindingsCount);
+  const aiExplanationStyle = getAiRiskExplanationStyle(aiRisk, postureStatus, failedFindingsCount);
+
 
   // ============================================================================
   // SECTION E: RECOMMENDED ACTIONS (Concise Administrator Remediation)
@@ -496,6 +505,9 @@ export default function ForensicsScreen({
     : (isConfirmedPlaintext ? "Plaintext application payload observed" : "UNCLASSIFIED / INSUFFICIENT EVIDENCE");
 
   const topRiskFactors = aiRisk.top_risk_factors || [];
+  const actualRiskFactors = topRiskFactors.filter(
+    (factor) => factor && factor.feature && factor.feature !== 'none' && !String(factor.label || '').toLowerCase().includes('no significant risk')
+  );
 
   // ============================================================================
   // FORENSIC PROCESSING PIPELINE EVALUATION (Strictly Data-Driven)
@@ -1642,23 +1654,29 @@ export default function ForensicsScreen({
               </span>
             </div>
 
+            {/* Dynamic AI Risk Assessment Narrative */}
+            <div className={`p-3 rounded-lg text-xs font-sans leading-relaxed border ${aiExplanationStyle.containerClass}`}>
+              <div className="flex items-start gap-2">
+                <span className={`material-symbols-outlined text-[16px] shrink-0 mt-0.5 ${aiExplanationStyle.iconClass}`}>
+                  {aiExplanationStyle.icon}
+                </span>
+                <span className={aiExplanationStyle.textClass}>
+                  {aiExplanation}
+                </span>
+              </div>
+            </div>
+
             <div className="flex flex-col gap-2.5 py-1">
-              {topRiskFactors.length === 0 ? (
-                <div className="text-slate-400 dark:text-slate-500 text-xs py-3 text-center">
-                  No significant risk factors observed
+              {actualRiskFactors.length === 0 ? (
+                <div className="text-slate-400 dark:text-slate-500 text-xs py-3 text-center font-sans">
+                  {operationalRiskTier === 'LOW'
+                    ? "No significant risk factors observed"
+                    : "No individual AI risk factors were returned by the model for this session."}
                 </div>
               ) : (
-                topRiskFactors.map((factor, idx) => {
+                actualRiskFactors.map((factor, idx) => {
                   const contribVal = factor.contribution != null ? Number(factor.contribution) : 0;
-                  const isNegative = factor.observed === true && factor.feature !== 'none';
-
-                  if (factor.feature === 'none') {
-                    return (
-                      <div key={`factor-${idx}`} className="text-emerald-700 dark:text-emerald-400 font-medium text-xs py-2">
-                        ✓ {factor.label}
-                      </div>
-                    );
-                  }
+                  const isNegative = factor.observed === true;
 
                   return (
                     <div key={`factor-${factor.feature}-${idx}`} className="flex flex-col gap-1 border-b border-slate-100 dark:border-slate-800 last:border-0 pb-2.5 last:pb-0">

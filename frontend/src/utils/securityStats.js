@@ -318,6 +318,110 @@ export function getAiRiskTier(aiRiskOrScore) {
 }
 
 /**
+ * Computes dynamic, non-contradictory explanation for the AI Risk Assessment card.
+ * Clearly articulates the relationship between the secondary ML risk signal and
+ * deterministic security posture / findings.
+ *
+ * Reconciles the common real-world case where AI predicts HIGH or CRITICAL risk
+ * on a standard or high-entropy session, but deterministic posture is SECURE with 0 findings.
+ *
+ * @param {Object|number|string} aiRiskOrScore - The ai_risk object or numerical score
+ * @param {string} [postureStatus='SECURE'] - The deterministic security posture status ('SECURE', 'AT_RISK', 'INCOMPLETE')
+ * @param {Array|number} [findingsOrCount=0] - Array of findings or count of failed findings
+ * @returns {string} Explanatory narrative text
+ */
+export function getAiRiskExplanation(aiRiskOrScore, postureStatus = 'SECURE', findingsOrCount = 0) {
+  const tier = getAiRiskTier(aiRiskOrScore);
+
+  let failedCount = 0;
+  if (Array.isArray(findingsOrCount)) {
+    failedCount = findingsOrCount.filter(
+      (f) => f && (f.isFail || (f.severity && !['INFO', 'PASS', 'INFORMATIONAL'].includes(String(f.severity).toUpperCase())))
+    ).length;
+  } else if (typeof findingsOrCount === 'number') {
+    failedCount = isNaN(findingsOrCount) ? 0 : findingsOrCount;
+  }
+
+  const isPostureSecure = String(postureStatus ?? '').trim().toUpperCase() === 'SECURE';
+
+  // Reconciled case: AI predicts elevated/critical risk, but deterministic security posture is SECURE with 0 findings
+  if ((tier === 'HIGH' || tier === 'CRITICAL') && isPostureSecure && failedCount === 0) {
+    const riskWord = tier === 'CRITICAL' ? 'critical' : 'elevated';
+    return `AI predicted ${riskWord} risk, but no deterministic security findings were observed. AI risk is a secondary signal and does not override the deterministic security posture.`;
+  }
+
+  switch (tier) {
+    case 'CRITICAL':
+      return 'AI indicates critical AI-predicted risk. Review contributing factors and correlate with deterministic security findings.';
+    case 'HIGH':
+      return 'AI indicates elevated cryptographic risk. Review contributing factors.';
+    case 'MODERATE':
+      return 'AI indicates moderate cryptographic risk. Review contributing factors.';
+    case 'LOW':
+    default:
+      return 'AI indicates low cryptographic risk.';
+  }
+}
+
+/**
+ * Provides theme-aware styling and icon definitions for the AI Risk explanation banner.
+ *
+ * @param {Object|number|string} aiRiskOrScore
+ * @param {string} [postureStatus='SECURE']
+ * @param {Array|number} [findingsOrCount=0]
+ * @returns {{ containerClass: string, iconClass: string, textClass: string, icon: string }}
+ */
+export function getAiRiskExplanationStyle(aiRiskOrScore, postureStatus = 'SECURE', findingsOrCount = 0) {
+  const tier = getAiRiskTier(aiRiskOrScore);
+
+  let failedCount = 0;
+  if (Array.isArray(findingsOrCount)) {
+    failedCount = findingsOrCount.filter(
+      (f) => f && (f.isFail || (f.severity && !['INFO', 'PASS', 'INFORMATIONAL'].includes(String(f.severity).toUpperCase())))
+    ).length;
+  } else if (typeof findingsOrCount === 'number') {
+    failedCount = isNaN(findingsOrCount) ? 0 : findingsOrCount;
+  }
+
+  const isPostureSecure = String(postureStatus ?? '').trim().toUpperCase() === 'SECURE';
+
+  if ((tier === 'HIGH' || tier === 'CRITICAL') && isPostureSecure && failedCount === 0) {
+    return {
+      containerClass: 'bg-sky-50/70 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/60',
+      iconClass: 'text-sky-600 dark:text-sky-400',
+      textClass: 'text-sky-950 dark:text-sky-200',
+      icon: 'info'
+    };
+  }
+
+  switch (tier) {
+    case 'CRITICAL':
+    case 'HIGH':
+      return {
+        containerClass: 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60',
+        iconClass: 'text-rose-600 dark:text-rose-400',
+        textClass: 'text-rose-950 dark:text-rose-200',
+        icon: 'warning'
+      };
+    case 'MODERATE':
+      return {
+        containerClass: 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60',
+        iconClass: 'text-amber-600 dark:text-amber-400',
+        textClass: 'text-amber-950 dark:text-amber-200',
+        icon: 'warning'
+      };
+    case 'LOW':
+    default:
+      return {
+        containerClass: 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60',
+        iconClass: 'text-emerald-600 dark:text-emerald-400',
+        textClass: 'text-emerald-950 dark:text-emerald-200',
+        icon: 'verified'
+      };
+  }
+}
+
+/**
  * Derive chronological daily trends from analyzed PCAPs.
  * For each calendar date:
  * - count analyzed reports/PCAPs
