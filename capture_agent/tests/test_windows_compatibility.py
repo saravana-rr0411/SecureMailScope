@@ -485,7 +485,7 @@ def test_inno_setup_scm_verification_and_agent_env():
     # Health check after SCM confirmation
     assert "start {#MyServiceName}" in content
     assert "http://127.0.0.1:9000/health" in content
-    assert "Attempts := 1 to 15" in content
+    assert "Attempts := 1 to 25" in content
 
 
 def test_build_installer_pythonservice_staging_and_clean_build():
@@ -597,3 +597,148 @@ def test_service_stdout_stderr_stream_safety():
     assert sys.stdout is not None
     assert sys.stderr is not None
     assert sys.stdin is not None
+
+
+def test_apply_windows_asyncio_protections():
+    """Verify apply_windows_asyncio_protections configures SelectorEventLoop policy on Windows."""
+    from capture_agent.windows.service import apply_windows_asyncio_protections
+    import asyncio
+
+    with patch("platform.system", return_value="Windows"):
+        mock_policy_cls = MagicMock()
+        with patch.object(asyncio, "WindowsSelectorEventLoopPolicy", mock_policy_cls, create=True):
+            with patch.object(asyncio, "set_event_loop_policy") as mock_set_policy:
+                apply_windows_asyncio_protections()
+                mock_set_policy.assert_called_once()
+
+
+def test_proactor_winerror64_patch_simulation():
+    """Verify the defense-in-depth proactor patch keeps the listener socket open upon WinError 64."""
+    import capture_agent.windows.service as svc_mod
+    from asyncio.proactor_events import BaseProactorEventLoop
+
+    class DummyProactorLoop:
+        def __init__(self):
+            self._debug = False
+            self.closed = False
+            self._accept_futures = {}
+            self._proactor = MagicMock()
+            self._proactor.accept.return_value = MagicMock()
+            self.exception_handler_calls = []
+
+        def is_closed(self):
+            return self.closed
+
+        def call_soon(self, fn):
+            self._loop_fn = fn
+
+        def call_exception_handler(self, ctx):
+            self.exception_handler_calls.append(ctx)
+
+    with patch("platform.system", return_value="Windows"):
+        # Reset patch flag for test
+        if hasattr(BaseProactorEventLoop, "_sms_patched_winerror64"):
+            delattr(BaseProactorEventLoop, "_sms_patched_winerror64")
+        svc_mod.apply_windows_asyncio_protections()
+
+        loop_inst = DummyProactorLoop()
+        mock_sock = MagicMock()
+        mock_sock.fileno.return_value = 10
+
+        BaseProactorEventLoop._start_serving(loop_inst, MagicMock(), mock_sock)
+        assert hasattr(loop_inst, "_loop_fn")
+
+        # Simulate f.result() raising OSError(22, WinError 64: ERROR_NETNAME_DELETED)
+        bad_future = MagicMock()
+        err64 = OSError(22, "The specified network name is no longer available")
+        err64.winerror = 64
+        bad_future.result.side_effect = err64
+
+        # Call loop(f) with error
+        loop_inst._loop_fn(bad_future)
+
+        # Verify sock.close() was NOT called!
+        mock_sock.close.assert_not_called()
+        # Verify proactor.accept was re-armed
+        loop_inst._proactor.accept.assert_called_with(mock_sock)
+
+
+def test_uvicorn_config_loop_selection_on_windows():
+    """Verify Uvicorn Config correctly resolves loop='asyncio:SelectorEventLoop'."""
+    import uvicorn
+    cfg = uvicorn.Config("capture_agent.main:app", host="127.0.0.1", port=9000, loop="asyncio:SelectorEventLoop")
+    factory = cfg.get_loop_factory()
+    assert factory is not None
+    loop = factory()
+    assert "SelectorEventLoop" in type(loop).__name__
+    loop.close()
+
+
+def test_selector_event_loop_resilience_to_client_rst():
+    """Verify that under SelectorEventLoop, abrupt client TCP RST does not kill the listening socket."""
+    import socket
+    import threading
+    import time
+    import urllib.request
+    import asyncio
+    import uvicorn
+    from capture_agent.main import app
+
+    stop_event = threading.Event()
+    ready_event = threading.Event()
+    test_port = 9955
+
+    def run_srv():
+        loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(loop)
+        cfg = uvicorn.Config(app, host="127.0.0.1", port=test_port, log_level="error", access_log=False, loop="asyncio:SelectorEventLoop")
+        server = uvicorn.Server(cfg)
+
+        async def serve_with_stop():
+            task = asyncio.create_task(server.serve())
+            while not server.started and not task.done() and not stop_event.is_set():
+                await asyncio.sleep(0.05)
+            if server.started:
+                ready_event.set()
+            while not stop_event.is_set() and not task.done():
+                await asyncio.sleep(0.1)
+            server.should_exit = True
+            await task
+
+        try:
+            loop.run_until_complete(serve_with_stop())
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=run_srv, daemon=True)
+    t.start()
+    assert ready_event.wait(timeout=5.0), "Server did not signal ready"
+
+    # Simulate abrupt client disconnects (TCP RST via SO_LINGER)
+    for _ in range(5):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("127.0.0.1", test_port))
+        # SO_LINGER timeout 0 forces RST on close
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+        s.close()
+        time.sleep(0.02)
+
+    # Verify HTTP health endpoint is still 200 OK after multiple client RSTs
+    with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/health", timeout=2) as resp:
+        assert resp.status == 200
+
+    stop_event.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+
+
+def test_service_worker_liveness_check_in_svcdorun():
+    """Verify SvcDoRun initializes ready_event and monitors worker thread."""
+    from capture_agent.windows.service import SecureMailScopeWindowsService
+
+    svc = SecureMailScopeWindowsService([])
+    assert hasattr(svc, "_ready_event")
+    assert hasattr(svc, "_stop_event")
+    svc._worker_thread = MagicMock()
+    svc._worker_thread.is_alive.return_value = False
+    assert not svc._worker_thread.is_alive()

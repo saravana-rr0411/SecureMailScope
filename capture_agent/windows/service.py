@@ -138,36 +138,152 @@ def get_service_host_exe() -> Optional[str]:
     return None
 
 
-def run_agent_server(stop_event: threading.Event):
-    """Runs Uvicorn server in worker thread."""
+def apply_windows_asyncio_protections():
+    """
+    Applies asyncio protections on Windows:
+    1. Sets WindowsSelectorEventLoopPolicy as default event loop policy.
+    2. Patches BaseProactorEventLoop._start_serving (if present) to prevent
+       transient client connection resets (WinError 64 ERROR_NETNAME_DELETED,
+       WSAECONNRESET 10054, WSAECONNABORTED 10053, ERROR_SEM_TIMEOUT 121)
+       from destroying the listening server socket (CPython Issue #93758).
+    """
+    if platform.system().lower() != "windows":
+        return
+
+    import asyncio
+    # 1. Enforce WindowsSelectorEventLoopPolicy for robust BSD-socket semantics
+    try:
+        if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            logger.info("Enforced WindowsSelectorEventLoopPolicy for Capture Agent service.")
+    except Exception as e:
+        logger.warning(f"Could not set WindowsSelectorEventLoopPolicy: {e}")
+
+    # 2. Defense-in-depth monkeypatch for ProactorEventLoop (CPython #93758)
+    try:
+        import asyncio.proactor_events
+        import asyncio.trsock
+        base_proactor = getattr(asyncio.proactor_events, "BaseProactorEventLoop", None)
+        if base_proactor and not getattr(base_proactor, "_sms_patched_winerror64", False):
+            orig_start_serving = base_proactor._start_serving
+
+            def patched_start_serving(self, protocol_factory, sock, sslcontext=None, server=None, backlog=100, ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
+                def loop(f=None):
+                    try:
+                        if f is not None:
+                            conn, addr = f.result()
+                            if self._debug:
+                                logger.debug("%r got a new connection from %r: %r", server, addr, conn)
+                            protocol = protocol_factory()
+                            if sslcontext is not None:
+                                self._make_ssl_transport(conn, protocol, sslcontext, server_side=True, extra={'peername': addr}, server=server, ssl_handshake_timeout=ssl_handshake_timeout, ssl_shutdown_timeout=ssl_shutdown_timeout)
+                            else:
+                                self._make_socket_transport(conn, protocol, extra={'peername': addr}, server=server)
+                        if self.is_closed():
+                            return
+                        f = self._proactor.accept(sock)
+                    except OSError as exc:
+                        win_err = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+                        # WinError 64: ERROR_NETNAME_DELETED, WinError 121: ERROR_SEM_TIMEOUT, 10053: WSAECONNABORTED, 10054: WSAECONNRESET
+                        if win_err in (64, 121, 10053, 10054) and not self.is_closed() and sock.fileno() != -1:
+                            logger.warning(f"Ignored transient client accept error (WinError {win_err}: {exc}); keeping server listener alive.")
+                            try:
+                                f = self._proactor.accept(sock)
+                                self._accept_futures[sock.fileno()] = f
+                                f.add_done_callback(loop)
+                                return
+                            except Exception as rearm_err:
+                                logger.error(f"Failed to re-arm accept on socket: {rearm_err}")
+                        if sock.fileno() != -1:
+                            self.call_exception_handler({
+                                'message': 'Accept failed on a socket',
+                                'exception': exc,
+                                'socket': asyncio.trsock.TransportSocket(sock),
+                            })
+                            sock.close()
+                        elif self._debug:
+                            logger.debug("Accept failed on socket %r", sock, exc_info=True)
+                    except asyncio.CancelledError:
+                        sock.close()
+                    else:
+                        self._accept_futures[sock.fileno()] = f
+                        f.add_done_callback(loop)
+
+                self.call_soon(loop)
+
+            base_proactor._start_serving = patched_start_serving
+            base_proactor._sms_patched_winerror64 = True
+            logger.info("Applied ProactorEventLoop WinError 64 resilience patch.")
+    except Exception as e:
+        logger.warning(f"Could not apply ProactorEventLoop patch: {e}")
+
+
+def run_agent_server(stop_event: threading.Event, ready_event: Optional[threading.Event] = None):
+    """Runs Uvicorn server in worker thread with single clear asyncio ownership."""
     try:
         load_service_env()
+        apply_windows_asyncio_protections()
+
+        import asyncio
+        if platform.system().lower() == "windows":
+            try:
+                loop = asyncio.SelectorEventLoop()
+            except Exception:
+                loop = asyncio.new_event_loop()
+        else:
+            loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         import uvicorn
         from capture_agent.main import app
+
+        loop_param = "asyncio:SelectorEventLoop" if platform.system().lower() == "windows" else "auto"
 
         config = uvicorn.Config(
             app,
             host="127.0.0.1",
             port=9000,
             log_level="info",
-            access_log=False
+            access_log=False,
+            loop=loop_param
         )
         server = uvicorn.Server(config)
 
-        # Monitor stop_event and shut down uvicorn when signaled
-        def stop_monitor():
-            while not stop_event.is_set():
-                time.sleep(0.5)
-            server.should_exit = True
+        async def serve_with_graceful_stop():
+            server_task = asyncio.create_task(server.serve())
 
-        monitor_thread = threading.Thread(target=stop_monitor, daemon=True)
-        monitor_thread.start()
+            # Wait for Uvicorn to bind and start listening
+            while not server.started and not server_task.done() and not stop_event.is_set():
+                await asyncio.sleep(0.05)
+
+            if server.started:
+                logger.info("Capture Agent Uvicorn server successfully bound and listening on 127.0.0.1:9000.")
+                if ready_event:
+                    ready_event.set()
+
+            # Cooperative monitoring loop
+            while not stop_event.is_set() and not server_task.done():
+                await asyncio.sleep(0.5)
+
+            if stop_event.is_set() and not server_task.done():
+                logger.info("Service stop event signaled; requesting Uvicorn shutdown...")
+                server.should_exit = True
+
+            await server_task
 
         logger.info("Starting Capture Agent Uvicorn server on 127.0.0.1:9000...")
-        server.run()
+        try:
+            loop.run_until_complete(serve_with_graceful_stop())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
         logger.info("Capture Agent Uvicorn server stopped cleanly.")
     except Exception as e:
         logger.error(f"Error in Capture Agent worker thread: {e}", exc_info=True)
+        if ready_event:
+            ready_event.set()
 
 
 def load_service_env() -> bool:
@@ -207,6 +323,7 @@ class SecureMailScopeWindowsService(BaseServiceFramework):
         if WIN32_AVAILABLE:
             self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self._stop_event = threading.Event()
+        self._ready_event = threading.Event()
         self._worker_thread = None
         logger.info("SecureMailScopeWindowsService.__init__ completed successfully.")
 
@@ -226,25 +343,39 @@ class SecureMailScopeWindowsService(BaseServiceFramework):
                     servicemanager.PYS_SERVICE_STARTED,
                     (self._svc_name_, "")
                 )
-                self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-            logger.info("Service status reported as RUNNING to SCM.")
 
             # Load environment configuration from agent.env if available
             load_service_env()
 
             self._worker_thread = threading.Thread(
                 target=run_agent_server,
-                args=(self._stop_event,),
+                args=(self._stop_event, self._ready_event),
                 name="AgentServerWorker",
                 daemon=True
             )
             self._worker_thread.start()
             logger.info("Worker thread started for Uvicorn.")
 
-            # Wait until SCM sends stop signal
+            # Wait briefly for HTTP server to confirm port 9000 is listening
+            if self._ready_event.wait(timeout=10.0):
+                logger.info("Uvicorn HTTP server confirmed listening on 127.0.0.1:9000.")
+            else:
+                logger.warning("Uvicorn HTTP server did not signal ready within 10s; reporting RUNNING to SCM and continuing.")
+
             if WIN32_AVAILABLE:
-                win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
-                logger.info("Service stop event received; exiting SvcDoRun.")
+                self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+            logger.info("Service status reported as RUNNING to SCM.")
+
+            # Monitor service stop event and worker thread liveness
+            if WIN32_AVAILABLE:
+                while True:
+                    rc = win32event.WaitForSingleObject(self.hWaitStop, 1000)
+                    if rc == win32event.WAIT_OBJECT_0:
+                        logger.info("Service stop event received; exiting SvcDoRun.")
+                        break
+                    if self._worker_thread and not self._worker_thread.is_alive():
+                        logger.error("AgentServerWorker thread exited unexpectedly.")
+                        break
         except Exception as exc:
             logger.error("Fatal exception in SvcDoRun: %s", exc, exc_info=True)
             if WIN32_AVAILABLE:
@@ -261,8 +392,9 @@ def standalone_main():
     logger.info("Running Capture Agent in standalone CLI mode...")
     load_service_env()
     stop_event = threading.Event()
+    ready_event = threading.Event()
     try:
-        run_agent_server(stop_event)
+        run_agent_server(stop_event, ready_event)
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received; stopping...")
         stop_event.set()

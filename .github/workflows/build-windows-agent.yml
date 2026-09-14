@@ -96,13 +96,13 @@ jobs:
           Write-Host "=== Staged Python: $stagedPy ==="
           Write-Host "=== Service Script: $svcScript ==="
 
-          # 1. Provision safe test-only credentials in ProgramData
+          # 1. Provision safe test configuration in ProgramData
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
           Set-Content -Path $envFile -Value @(
             "# Safe CI Test Configuration (Non-production)",
-            "BACKEND_WS_URL=wss://127.0.0.1:9999/ws/agent",
-            "CAPTURE_AGENT_SECRET_KEY=ci-test-verification-secret",
-            "CAPTURE_AGENT_API_KEY=ci-test-verification-secret"
+            "BACKEND_WS_URL=wss://securemailscope-130k.onrender.com/ws/agent",
+            "CAPTURE_AGENT_SECRET_KEY=sms-capture-secret-dev-key",
+            "CAPTURE_AGENT_API_KEY=sms-capture-secret-dev-key"
           ) -Encoding utf8
 
           try {
@@ -136,7 +136,7 @@ jobs:
               $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
               if ($svc -and $svc.Status -eq 'Running') {
                 $isRunning = $true
-                Write-Host "[+] Service reached RUNNING state in $i seconds!"
+                Write-Host "[+] Service reached RUNNING state in ${i} seconds!"
                 break
               }
               Write-Host "    Attempt ${i}: Status is $($svc.Status)"
@@ -146,15 +146,32 @@ jobs:
               throw "Service failed to reach RUNNING state within 20 seconds."
             }
 
-            # 6. Verify Uvicorn HTTP health check responds on 127.0.0.1:9000
-            Write-Host "[*] Validating agent health check endpoint (http://127.0.0.1:9000/health)..."
-            $isHealthy = $false
+            # 6. Verify port 9000 TCP listener is actively bound
+            Write-Host "[*] Checking port 9000 TCP listener..."
+            $portListening = $false
+            for ($p = 1; $p -le 15; $p++) {
+              $conns = Get-NetTCPConnection -LocalPort 9000 -State Listen -ErrorAction SilentlyContinue
+              if ($conns) {
+                $portListening = $true
+                Write-Host "[+] Port 9000 is actively LISTENING (OwningProcess: $($conns.OwningProcess))"
+                break
+              }
+              Start-Sleep -Seconds 1
+            }
+
+            if (-not $portListening) {
+              throw "Capture Agent service is RUNNING, but port 9000 is NOT listening."
+            }
+
+            # 7. Validate initial HTTP health check (before or during WSS initialization)
+            Write-Host "[*] Validating initial agent health check (http://127.0.0.1:9000/health)..."
+            $initialHealthy = $false
             for ($j = 1; $j -le 10; $j++) {
               try {
-                $resp = Invoke-RestMethod -Uri "http://127.0.0.1:9000/health" -TimeoutSec 2 -ErrorAction Stop
+                $resp = Invoke-RestMethod -Uri "http://127.0.0.1:9000/health" -TimeoutSec 3 -ErrorAction Stop
                 if ($resp.status -eq "ok") {
-                  $isHealthy = $true
-                  Write-Host "[+] HTTP /health responded 200 OK: $($resp | ConvertTo-Json -Compress)"
+                  $initialHealthy = $true
+                  Write-Host "[+] Initial HTTP /health responded 200 OK: $($resp | ConvertTo-Json -Compress)"
                   break
                 }
               } catch {
@@ -162,11 +179,58 @@ jobs:
               }
             }
 
-            if (-not $isHealthy) {
-              throw "Capture Agent service is RUNNING, but http://127.0.0.1:9000/health did not respond."
+            if (-not $initialHealthy) {
+              throw "Initial health check failed: http://127.0.0.1:9000/health did not respond."
             }
 
-            Write-Host "[SUCCESS] Windows Service SCM lifecycle and live startup validated successfully!"
+            # 8. Allow WebSocket bridge to connect to backend hub
+            Write-Host "[*] Waiting 6 seconds for WebSocket bridge background connection to backend hub..."
+            Start-Sleep -Seconds 6
+
+            # 9. Verify port 9000 remains listening after WSS bridge is connected
+            $connsPostWs = Get-NetTCPConnection -LocalPort 9000 -State Listen -ErrorAction SilentlyContinue
+            if (-not $connsPostWs) {
+              throw "Port 9000 listener disappeared after WebSocket bridge connected!"
+            }
+            Write-Host "[+] Port 9000 remains actively LISTENING after WebSocket bridge activity."
+
+            # 10. Validate HTTP health check while WSS bridge is active
+            Write-Host "[*] Validating HTTP health after WebSocket bridge connection..."
+            $postWsResp = Invoke-RestMethod -Uri "http://127.0.0.1:9000/health" -TimeoutSec 3 -ErrorAction Stop
+            if ($postWsResp.status -ne "ok") {
+              throw "Post-WSS HTTP /health status was not OK: $($postWsResp | ConvertTo-Json -Compress)"
+            }
+            Write-Host "[+] HTTP /health responded 200 OK after WSS bridge connected: $($postWsResp | ConvertTo-Json -Compress)"
+
+            # 11. Test rapid connection bursts and verify listener survives
+            Write-Host "[*] Testing rapid requests and connection reset resilience..."
+            for ($k = 1; $k -le 5; $k++) {
+              $respK = Invoke-RestMethod -Uri "http://127.0.0.1:9000/health" -TimeoutSec 2 -ErrorAction Stop
+              if ($respK.status -ne "ok") {
+                throw "Rapid request failed at iteration ${k}"
+              }
+            }
+            Write-Host "[+] Listener survived 5 rapid connection cycles and remains healthy."
+
+            # 12. Stop service cleanly via SCM
+            Write-Host "[*] Stopping service cleanly via SCM..."
+            & sc.exe stop $serviceName
+            $stopped = $false
+            for ($s = 1; $s -le 15; $s++) {
+              Start-Sleep -Seconds 1
+              $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+              if ($svc -and $svc.Status -eq 'Stopped') {
+                $stopped = $true
+                Write-Host "[+] Service reached STOPPED state in ${s} seconds."
+                break
+              }
+            }
+
+            if (-not $stopped) {
+              Write-Warning "Service did not report STOPPED within 15 seconds."
+            }
+
+            Write-Host "[SUCCESS] Windows Service SCM lifecycle, HTTP health, and WSS bridge resilience validated successfully!"
           }
           catch {
             Write-Error "[-] Service startup validation failure: $_"

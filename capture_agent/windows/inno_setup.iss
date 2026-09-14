@@ -275,11 +275,11 @@ begin
 
     // Wait for the service to initialize and respond to health checks
     IsHealthy := False;
-    for Attempts := 1 to 15 do
+    for Attempts := 1 to 25 do
     begin
       try
         WinHttpReq := CreateOleObject('WinHttp.WinHttpRequest.5.1');
-        WinHttpReq.SetTimeouts(1000, 1000, 1000, 1000);
+        WinHttpReq.SetTimeouts(2000, 2000, 2000, 2000);
         WinHttpReq.Open('GET', 'http://127.0.0.1:9000/health', False);
         WinHttpReq.Send();
         if WinHttpReq.Status = 200 then
@@ -294,7 +294,7 @@ begin
 
     if not IsHealthy then
     begin
-      MsgBox('SecureMailScope Capture Agent service is registered in Windows Service Manager, but the health check at http://127.0.0.1:9000/health did not respond within 15 seconds.' + #13#10 + #13#10 +
+      MsgBox('SecureMailScope Capture Agent service is registered in Windows Service Manager, but the health check at http://127.0.0.1:9000/health did not respond within 30 seconds.' + #13#10 + #13#10 +
              'The service may still be starting or initializing dependencies.' + #13#10 + #13#10 +
              'Please check the service log file at:' + #13#10 +
              LogFilePath + #13#10 + #13#10 +

@@ -5,9 +5,17 @@ import secrets
 import asyncio
 import logging
 import datetime
+import platform
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
+
+if platform.system().lower() == "windows":
+    try:
+        if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
 
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks, status, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -463,4 +471,5 @@ async def generate_authentic_capture(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("capture_agent.main:app", host=AGENT_HOST, port=AGENT_PORT, reload=False)
+    loop_param = "asyncio:SelectorEventLoop" if platform.system().lower() == "windows" else "auto"
+    uvicorn.run("capture_agent.main:app", host=AGENT_HOST, port=AGENT_PORT, loop=loop_param, reload=False)
