@@ -1,7 +1,16 @@
 import React from 'react';
 import BrandEmblem from './BrandEmblem';
+import { ROLES } from '../utils/authRbac';
 
-export default function TopAppBar({ theme = 'light', onToggleTheme }) {
+export default function TopAppBar({
+  theme = 'light',
+  onToggleTheme,
+  userRole = ROLES.SOC_ANALYST,
+  userEmail = '',
+  onLogout,
+}) {
+  const isExecutive = userRole === ROLES.EXECUTIVE;
+
   return (
     <header className="fixed top-0 left-0 right-0 h-16 z-50 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs px-6 flex items-center justify-between transition-colors duration-150">
       {/* Left: Brand & Product */}
@@ -24,12 +33,18 @@ export default function TopAppBar({ theme = 'light', onToggleTheme }) {
         </div>
       </div>
 
-      {/* Right: SOC Workstation Mode & Theme Toggle */}
-      <div className="flex items-center gap-2.5">
+      {/* Right: Workstation Mode, Identity & Theme Toggle */}
+      <div className="flex items-center gap-3">
         <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-sans text-[10px] font-semibold text-slate-600 dark:text-slate-300 tracking-wider uppercase">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-          <span>SOC Workstation</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${isExecutive ? 'bg-indigo-500' : 'bg-emerald-500'}`}></span>
+          <span>{isExecutive ? 'Executive Workstation' : 'SOC Workstation'}</span>
         </div>
+
+        {userEmail && (
+          <span className="hidden md:inline-block text-xs text-slate-500 dark:text-slate-400 font-normal max-w-[200px] truncate">
+            {userEmail}
+          </span>
+        )}
 
         {/* Dark / Light Mode Toggle Button */}
         <button
@@ -43,6 +58,19 @@ export default function TopAppBar({ theme = 'light', onToggleTheme }) {
             {theme === 'dark' ? 'light_mode' : 'dark_mode'}
           </span>
         </button>
+
+        {/* Quick Sign Out Action */}
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            aria-label="Sign out"
+            title="Sign out"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all duration-150 cursor-pointer shadow-2xs"
+          >
+            <span className="material-symbols-outlined text-[17px]">logout</span>
+          </button>
+        )}
       </div>
     </header>
   );

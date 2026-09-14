@@ -1,11 +1,21 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import TopAppBar from './components/TopAppBar';
 import SidebarNav from './components/SidebarNav';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
 import OverviewScreen from './components/OverviewScreen';
 import ForensicsScreen from './components/ForensicsScreen';
+import LoginScreen from './components/LoginScreen';
+import BrandEmblem from './components/BrandEmblem';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from './reportGenerator';
 import { deriveSecurityStats } from './utils/securityStats';
+import { supabase, isSupabaseConfigured, fetchUserRole, signOutUser } from './utils/supabaseClient';
+import {
+  ROLES,
+  ROUTES,
+  normalizePath,
+  evaluateRouteAccess,
+  getDefaultRouteForRole,
+} from './utils/authRbac';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 const STORAGE_VERSION = "v4.0_canonical_sync";
@@ -45,7 +55,188 @@ try {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('executive'); // 'executive' | 'overview' | 'forensics'
+  // --- AUTHENTICATION & ROUTE-BASED ACCESS CONTROL (RBAC) STATE ---
+  const [currentPath, setCurrentPath] = useState(() => {
+    return typeof window !== 'undefined' ? window.location.pathname : ROUTES.LOGIN;
+  });
+  const [_session, setSession] = useState(null);
+  const [user, setUser] = useState(null);
+  const [userRole, setUserRole] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // Navigation handler with HTML5 History API synchronization
+  const navigateTo = useCallback((path, replace = false) => {
+    const norm = normalizePath(path);
+    if (typeof window !== 'undefined') {
+      if (replace) {
+        window.history.replaceState(null, '', norm);
+      } else {
+        window.history.pushState(null, '', norm);
+      }
+    }
+    setCurrentPath(norm);
+  }, []);
+
+  // 1. Initial Session Restoration & Supabase Auth Listener
+  useEffect(() => {
+    let isMounted = true;
+
+    async function initAuth() {
+      if (!isSupabaseConfigured || !supabase) {
+        if (isMounted) {
+          setAuthLoading(false);
+          const norm = normalizePath(window.location.pathname);
+          if (norm !== ROUTES.LOGIN) {
+            window.history.replaceState(null, '', ROUTES.LOGIN);
+            setCurrentPath(ROUTES.LOGIN);
+          }
+        }
+        return;
+      }
+
+      try {
+        const {
+          data: { session: existingSession },
+        } = await supabase.auth.getSession();
+        if (existingSession?.user) {
+          const role = await fetchUserRole(existingSession.user.id);
+          if (isMounted) {
+            if (role) {
+              setSession(existingSession);
+              setUser(existingSession.user);
+              setUserRole(role);
+            } else {
+              // Unassigned user account: clear session & force to /login
+              await supabase.auth.signOut();
+              setSession(null);
+              setUser(null);
+              setUserRole(null);
+              if (window.location.pathname !== ROUTES.LOGIN) {
+                window.history.replaceState(null, '', ROUTES.LOGIN);
+                setCurrentPath(ROUTES.LOGIN);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Session initialization error:', err);
+      } finally {
+        if (isMounted) {
+          setAuthLoading(false);
+        }
+      }
+    }
+
+    initAuth();
+
+    // Listen for auth state changes
+    const { data: authListener } = supabase
+      ? supabase.auth.onAuthStateChange(async (event, newSession) => {
+          if (event === 'SIGNED_OUT' || !newSession) {
+            setSession(null);
+            setUser(null);
+            setUserRole(null);
+            navigateTo(ROUTES.LOGIN, true);
+          } else if (event === 'TOKEN_REFRESHED') {
+            if (newSession?.user) {
+              setSession(newSession);
+              setUser(newSession.user);
+            }
+          } else if (event === 'SIGNED_IN') {
+            // When already on the login screen, workstation entry is strictly orchestrated
+            // by LoginScreen's handleLoginSuccess to ensure the selected role context
+            // matches the database role before entering the application.
+            const isOnLoginPage = normalizePath(window.location.pathname) === ROUTES.LOGIN;
+            if (!isOnLoginPage && newSession?.user) {
+              const role = await fetchUserRole(newSession.user.id);
+              if (role) {
+                setSession(newSession);
+                setUser(newSession.user);
+                setUserRole(role);
+              } else {
+                await supabase.auth.signOut();
+                setSession(null);
+                setUser(null);
+                setUserRole(null);
+                navigateTo(ROUTES.LOGIN, true);
+              }
+            }
+          }
+        })
+      : { data: { subscription: { unsubscribe: () => {} } } };
+
+    // Listen for browser Back / Forward navigation
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      isMounted = false;
+      authListener?.subscription?.unsubscribe?.();
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [navigateTo]);
+
+  // 2. Authoritative Route Access Guard
+  useEffect(() => {
+    if (authLoading) return;
+
+    const access = evaluateRouteAccess(currentPath, userRole);
+    if (!access.allowed && access.redirectPath) {
+      if (window.location.pathname !== access.redirectPath) {
+        window.history.replaceState(null, '', access.redirectPath);
+      }
+      setCurrentPath(access.redirectPath);
+    }
+  }, [currentPath, userRole, authLoading]);
+
+  // Map current route to active navigation tab strictly scoped to authoritative userRole
+  const activeTab = useMemo(() => {
+    const norm = normalizePath(currentPath);
+    if (userRole === ROLES.EXECUTIVE) {
+      return 'executive';
+    }
+    if (userRole === ROLES.SOC_ANALYST) {
+      if (norm === ROUTES.FORENSICS) return 'forensics';
+      return 'overview';
+    }
+    return 'overview';
+  }, [currentPath, userRole]);
+
+  // Tab change handler from sidebar or in-page navigation strictly enforcing role boundaries
+  const handleNavigateTab = (tabId) => {
+    if (userRole === ROLES.SOC_ANALYST) {
+      if (tabId === 'overview') {
+        navigateTo(ROUTES.OVERVIEW);
+      } else if (tabId === 'forensics' || tabId === 'sessions' || tabId === 'ai_risk') {
+        navigateTo(ROUTES.FORENSICS);
+      }
+      // SOC Analyst cannot navigate to executive
+    } else if (userRole === ROLES.EXECUTIVE) {
+      if (tabId === 'executive') {
+        navigateTo(ROUTES.EXECUTIVE);
+      }
+      // Executive cannot navigate to overview or forensics
+    }
+  };
+
+  // Sign out handler
+  const handleLogout = async () => {
+    await signOutUser();
+    setUser(null);
+    setSession(null);
+    setUserRole(null);
+    navigateTo(ROUTES.LOGIN, true);
+  };
+
+  // Successful login callback from LoginScreen
+  const handleLoginSuccess = (authenticatedUser, assignedRole) => {
+    setUser(authenticatedUser);
+    setUserRole(assignedRole);
+    const destination = getDefaultRouteForRole(assignedRole);
+    navigateTo(destination, true);
+  };
 
   // CANONICAL STATE: analyzedPcaps[] is the single source of truth for the PCAP collection
   const [analyzedPcaps, setAnalyzedPcaps] = useState(() => {
@@ -110,6 +301,7 @@ export default function App() {
 
   // Authoritative Backend Synchronization: Load stored analysis history from Supabase
   useEffect(() => {
+    if (!userRole) return;
     let isMounted = true;
     async function syncCapturesFromBackend() {
       try {
@@ -139,7 +331,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [userRole]);
 
   // Dark mode theme state with localStorage persistence & system preference fallback
   const [theme, setTheme] = useState(() => {
@@ -462,7 +654,7 @@ export default function App() {
         const updatedList = [newCapture, ...filtered];
         try {
           // Omit large binary base64 from localStorage to prevent quota exhaustion
-          const storageList = updatedList.map(({ pcap_base64, ...rest }) => rest);
+          const storageList = updatedList.map(({ pcap_base64: _pcap_base64, ...rest }) => rest);
           localStorage.setItem('sms_analyzed_pcaps', JSON.stringify(storageList));
         } catch (err) {
           console.warn("Storage quota exceeded saving analyzed PCAPs:", err);
@@ -472,7 +664,7 @@ export default function App() {
 
       setCurrentCaptureId(captureId);
       try {
-        const { pcap_base64, ...storageCapture } = newCapture;
+        const { pcap_base64: _pcap_base64, ...storageCapture } = newCapture;
         localStorage.setItem('sms_current_capture_id', captureId);
         localStorage.setItem('sms_current_capture', JSON.stringify(storageCapture));
       } catch {}
@@ -563,6 +755,33 @@ export default function App() {
     }
   };
 
+  // 1. Session Verification Loading Screen
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#F4F7FB] dark:bg-[#0b1320] flex flex-col items-center justify-center p-4 transition-colors duration-150">
+        <BrandEmblem className="w-12 h-12 rounded-xl shadow-md animate-pulse" />
+        <div className="mt-4 text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+          <span className="material-symbols-outlined text-[18px] animate-spin text-[#006591] dark:text-sky-400">
+            refresh
+          </span>
+          <span>Verifying SecureMailScope session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated or Login Route View
+  if (!userRole || normalizePath(currentPath) === ROUTES.LOGIN) {
+    return (
+      <LoginScreen
+        onLoginSuccess={handleLoginSuccess}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
+  }
+
+  // 3. Authenticated Role-Based Workstation Shell
   return (
     <div
       className="min-h-screen bg-[#F4F7FB] dark:bg-[#0b1320] text-[#0b1c30] dark:text-slate-100 font-sans antialiased transition-colors duration-150"
@@ -597,10 +816,22 @@ export default function App() {
       )}
 
       {/* Top Application Bar */}
-      <TopAppBar theme={theme} onToggleTheme={toggleTheme} />
+      <TopAppBar
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        userRole={userRole}
+        userEmail={user?.email}
+        onLogout={handleLogout}
+      />
 
       {/* Left Sidebar Navigation */}
-      <SidebarNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <SidebarNav
+        activeTab={activeTab}
+        onTabChange={handleNavigateTab}
+        userRole={userRole}
+        userEmail={user?.email}
+        onLogout={handleLogout}
+      />
 
       {/* Main Viewport Content */}
       <div className="pl-60 pt-16 min-h-screen bg-[#F4F7FB] dark:bg-[#0b1320] transition-colors duration-150">
@@ -651,27 +882,28 @@ export default function App() {
             </div>
           )}
 
-          {/* Screen 1: Executive Security Dashboard */}
-          {activeTab === 'executive' && (
+          {/* Screen 1: Executive Security Dashboard (EXECUTIVE role only) */}
+          {userRole === ROLES.EXECUTIVE && activeTab === 'executive' && (
             <ExecutiveDashboard
               capture={currentCapture}
               analyzedPcaps={analyzedPcaps}
               stats={securityStats}
               onSelectCapture={handleSelectCapture}
-              onNavigate={setActiveTab}
+              onNavigate={handleNavigateTab}
               onTriggerUpload={triggerUpload}
               theme={theme}
+              userRole={userRole}
             />
           )}
 
-          {/* Screen 2: Overview Screen */}
-          {activeTab === 'overview' && (
+          {/* Screen 2: Overview Screen (SOC_ANALYST role only) */}
+          {userRole === ROLES.SOC_ANALYST && activeTab === 'overview' && (
             <OverviewScreen
               capture={currentCapture}
               analyzedPcaps={analyzedPcaps}
               stats={securityStats}
               onSelectCapture={handleSelectCapture}
-              onNavigate={setActiveTab}
+              onNavigate={handleNavigateTab}
               onTriggerUpload={triggerUpload}
               onGenerateAuthenticCapture={handleGenerateAuthenticCapture}
               onCaptureGmail={handleCaptureGmail}
@@ -679,8 +911,9 @@ export default function App() {
             />
           )}
 
-          {/* Screen 3: Unified Forensics & AI Risk Screen */}
-          {(activeTab === 'forensics' || activeTab === 'sessions' || activeTab === 'ai_risk') && (
+          {/* Screen 3: Unified Forensics & AI Risk Screen (SOC_ANALYST role only) */}
+          {userRole === ROLES.SOC_ANALYST &&
+            (activeTab === 'forensics' || activeTab === 'sessions' || activeTab === 'ai_risk') && (
             <ForensicsScreen
               capture={currentCapture}
               selectedSessionId={activeSessionId}

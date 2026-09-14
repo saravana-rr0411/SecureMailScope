@@ -16,7 +16,8 @@ export default function ExecutiveDashboard({
   onSelectCapture,
   onNavigate,
   onTriggerUpload,
-  theme = 'light'
+  theme = 'light',
+  userRole = 'EXECUTIVE'
 }) {
   const displayPcaps = useMemo(() => Array.isArray(analyzedPcaps) ? analyzedPcaps : [], [analyzedPcaps]);
 
@@ -508,13 +509,15 @@ export default function ExecutiveDashboard({
               )}
             </button>
           )}
-          <button
-            onClick={() => onNavigate('forensics')}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 active:bg-slate-100 dark:active:bg-slate-700 transition-all duration-150 shadow-2xs text-xs font-semibold cursor-pointer"
-          >
-            <span>Open SOC Forensics</span>
-            <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-          </button>
+          {userRole !== 'EXECUTIVE' && (
+            <button
+              onClick={() => onNavigate('forensics')}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 active:bg-slate-100 dark:active:bg-slate-700 transition-all duration-150 shadow-2xs text-xs font-semibold cursor-pointer"
+            >
+              <span>Open SOC Forensics</span>
+              <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+            </button>
+          )}
         </div>
       </header>
 
