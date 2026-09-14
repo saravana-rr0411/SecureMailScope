@@ -471,7 +471,7 @@ export default function ExecutiveDashboard({
             </div>
           </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Executive Security Dashboard</h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Fleet-wide session security posture, chronological risk trajectory, and analyzed capture history</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Fleet security posture and risk telemetry</p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
           {onTriggerUpload && (
@@ -544,7 +544,7 @@ export default function ExecutiveDashboard({
                 </span>
               </div>
               <span className="text-[11px] text-slate-400 dark:text-slate-500 font-normal">
-                {totalSessions} total network session{totalSessions === 1 ? '' : 's'} analyzed
+                {totalSessions} session{totalSessions === 1 ? '' : 's'} recorded
               </span>
             </div>
             <div className="w-11 h-11 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 shrink-0">
@@ -678,22 +678,17 @@ export default function ExecutiveDashboard({
         <div className="bg-white dark:bg-slate-900 rounded-xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col gap-4 transition-colors duration-150 max-w-full overflow-hidden">
           {/* Card Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">verified_user</span>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                  Security Status Distribution
-                </h2>
-                {isScrollable && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
-                    <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
-                    <span>{numDays} points · Scroll</span>
-                  </span>
-                )}
-              </div>
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                Analyzed PCAP reports classified by cryptographic & security baseline
-              </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">verified_user</span>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                Security Status Distribution
+              </h2>
+              {isScrollable && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
+                  <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
+                  <span>{numDays} points · Scroll</span>
+                </span>
+              )}
             </div>
 
             {/* Legend for Chart 1 */}
@@ -923,28 +918,23 @@ export default function ExecutiveDashboard({
         <div className="bg-white dark:bg-slate-900 rounded-xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col gap-4 transition-colors duration-150 max-w-full overflow-hidden">
           {/* Card Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">query_stats</span>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                  Risk Score Trend
-                </h2>
-                {trendTrajectory && (
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${trendTrajectory.colorClass}`}>
-                    <span className="material-symbols-outlined text-[12px]">{trendTrajectory.icon}</span>
-                    {trendTrajectory.label}
-                  </span>
-                )}
-                {isScrollable && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
-                    <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
-                    <span>{numDays} points · Scroll</span>
-                  </span>
-                )}
-              </div>
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                Fleet average AI risk score trajectory across the selected period (0–100 scale)
-              </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">query_stats</span>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                Risk Score Trend
+              </h2>
+              {trendTrajectory && (
+                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${trendTrajectory.colorClass}`}>
+                  <span className="material-symbols-outlined text-[12px]">{trendTrajectory.icon}</span>
+                  {trendTrajectory.label}
+                </span>
+              )}
+              {isScrollable && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
+                  <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
+                  <span>{numDays} points · Scroll</span>
+                </span>
+              )}
             </div>
 
             {/* Legend for Chart 2 */}

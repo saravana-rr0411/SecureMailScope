@@ -359,7 +359,7 @@ export default function OverviewScreen({
             )}
           </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Cryptographic Security Overview</h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Cross-capture cryptographic security posture and AI risk trajectory</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Cryptographic security posture and AI risk</p>
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
@@ -805,20 +805,15 @@ export default function OverviewScreen({
       {/* ==================================================================== */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-xs flex flex-col gap-4 transition-colors duration-150 max-w-full overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-3">
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">trending_up</span>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Security Risk Trend</h2>
-              {isScrollable && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
-                  <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
-                  <span>{numPoints} Captures · Scroll</span>
-                </span>
-              )}
-            </div>
-            <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-              Chronological AI risk trajectory across analyzed captures
-            </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">trending_up</span>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Security Risk Trend</h2>
+            {isScrollable && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 shrink-0">
+                <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
+                <span>{numPoints} Captures · Scroll</span>
+              </span>
+            )}
           </div>
 
           {/* Trend Axis Guidance Legend */}
@@ -1208,7 +1203,7 @@ export default function OverviewScreen({
                     Capture Agent Setup &amp; Prerequisite Guide
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Authentic network packet recording requires the agent service
+                    Agent service installation and verification
                   </p>
                 </div>
               </div>

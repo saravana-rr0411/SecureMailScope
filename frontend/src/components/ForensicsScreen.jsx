@@ -204,7 +204,7 @@ export default function ForensicsScreen({
         <span className="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-600 mb-3">biotech</span>
         <h3 className="text-base font-bold text-slate-900 dark:text-white">No Capture Loaded for Forensics</h3>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md">
-          Upload or select a PCAP capture from the Executive Dashboard to view detailed cryptographic reconstruction and forensic analysis.
+          Upload or select a PCAP capture to begin forensic analysis.
         </p>
       </div>
     );
@@ -1359,7 +1359,6 @@ export default function ForensicsScreen({
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[16px] text-[#006591] dark:text-sky-400">gpp_maybe</span>
                 <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Security Findings</h2>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">· Observed from PCAP</span>
               </div>
               <span className="text-[11px] font-sans text-slate-400 dark:text-slate-500">
                 {findingsList.filter(f => f.isFail).length > 0
@@ -1454,7 +1453,6 @@ export default function ForensicsScreen({
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">assignment_turned_in</span>
                 <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Recommended Actions</h2>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">· Remediation</span>
               </div>
               <span className="text-[11px] font-sans text-slate-400 dark:text-slate-500">
                 {displayActions.length} action{displayActions.length === 1 ? '' : 's'}
@@ -1484,7 +1482,6 @@ export default function ForensicsScreen({
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-[#006591] dark:text-sky-400">terminal</span>
                 <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">Key Security Details</h2>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">· Technical Attributes</span>
               </div>
               <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700">
                 {protocol} · Port {dstPort}

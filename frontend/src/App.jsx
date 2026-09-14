@@ -590,7 +590,7 @@ export default function App() {
             <span className="material-symbols-outlined text-4xl text-[#006591] dark:text-sky-400">cloud_upload</span>
             <div>
               <div className="font-bold text-slate-900 dark:text-white text-base">Drop PCAP file here</div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Passive network capture ingestion</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">Drop .pcap or .pcapng files</div>
             </div>
           </div>
         </div>
