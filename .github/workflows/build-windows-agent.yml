@@ -139,7 +139,7 @@ jobs:
                 Write-Host "[+] Service reached RUNNING state in $i seconds!"
                 break
               }
-              Write-Host "    Attempt $i: Status is $($svc.Status)"
+              Write-Host "    Attempt ${i}: Status is $($svc.Status)"
             }
 
             if (-not $isRunning) {

@@ -333,6 +333,14 @@ def test_github_actions_windows_workflow_structure():
     assert "sc.exe start $serviceName" in content
     assert "http://127.0.0.1:9000/health" in content
 
+    # Ensure PowerShell script does not contain unsafe "$var:" style variable interpolation
+    import re
+    assert not re.findall(r"\$[A-Za-z0-9_]+:", content), (
+        "PowerShell script contains unsafe variable interpolation immediately followed by colon (e.g. '$i:'). "
+        "Use explicit delimiters '${i}:' instead."
+    )
+    assert 'Attempt ${i}:' in content
+
 
 def test_windows_gmail_capture_selects_active_external_interface_not_loopback():
     """Verify Gmail capture mode selects active external interface (Wi-Fi), never loopback."""
