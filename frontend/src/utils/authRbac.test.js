@@ -277,3 +277,19 @@ test('17. Role selector button NEVER determines authorization or grants cross-ro
   assert.equal(analystRouteAccess.redirectPath, ROUTES.EXECUTIVE);
 });
 
+test('18. Sidebar navigation footer contains ONLY sign out action and no visible email or "Authenticated as" label', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const sidebarPath = path.resolve(process.cwd(), 'src/components/SidebarNav.jsx');
+  const content = fs.readFileSync(sidebarPath, 'utf8');
+
+  // Verify email and "Authenticated as" text are completely removed
+  assert.equal(/authenticated\s*as/i.test(content), false);
+  assert.equal(/signed\s*in\s*as/i.test(content), false);
+  assert.equal(/{userEmail\s*&&/i.test(content), false);
+
+  // Verify Sign Out button remains intact
+  assert.equal(content.includes('Sign Out'), true);
+  assert.equal(content.includes('onLogout'), true);
+});
+

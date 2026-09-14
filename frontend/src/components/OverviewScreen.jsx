@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
 
 const NPCAP_OFFICIAL_URL = "https://npcap.com/#download";
@@ -75,84 +75,108 @@ export default function OverviewScreen({
   }, [gmailCaptureStep]);
 
   // Check agent connectivity:
-  // 1. Authoritative check: Local Capture Agent on http://127.0.0.1:9000/health
-  //    (This directly probes the Capture Agent running on the same PC as the browser)
-  // 2. Fallback check: Backend AgentHub (/api/agent/status?client_os=...)
-  //    (Only accepted if the remote agent matches the client browser OS)
-  const checkAgentHealth = async () => {
-    // Priority 1: Probe local machine Capture Agent at http://127.0.0.1:9000/health
+  // 1. Authoritative check: Local Capture Agent health probe
+  //    (Direct probe to http://127.0.0.1:9000/health, http://localhost:9000/health,
+  //     and local Vite proxy /local-agent/health for zero-CORS/PNA friction on localhost)
+  // 2. Local Backend check: /api/capture/status
+  //    (Local FastAPI server queries http://127.0.0.1:9000/health without browser-level origin issues)
+  // 3. Remote Fallback check: Backend AgentHub (/api/agent/status?client_os=...)
+  //    (Only used if remote agent matches the client browser OS and apiBase is set)
+  const checkAgentHealth = useCallback(async () => {
+    // Priority 1: Probe local machine Capture Agent
+    const localEndpoints = [];
+    if (typeof window !== 'undefined') {
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isLocalhost) {
+        localEndpoints.push('/local-agent/health');
+      }
+    }
+    localEndpoints.push('http://127.0.0.1:9000/health');
+    localEndpoints.push('http://localhost:9000/health');
+
+    for (const endpoint of localEndpoints) {
+      try {
+        const localController = new AbortController();
+        const localTimeoutId = setTimeout(() => localController.abort(), 2000);
+        const res = await fetch(endpoint, {
+          method: 'GET',
+          signal: localController.signal
+        });
+        clearTimeout(localTimeoutId);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && (data.status === 'OK' || data.can_capture !== undefined)) {
+            setAgentStatus('connected');
+            setAgentInfo(data);
+            return true;
+          }
+        }
+      } catch {
+        // Continue to next probe
+      }
+    }
+
+    // Priority 2: Check local backend capture status (/api/capture/status)
+    // In local development, the local backend on port 8000 directly checks http://127.0.0.1:9000/health
+    // without contacting Render or relying on browser-level CORS/PNA.
     try {
-      const localController = new AbortController();
-      const localTimeoutId = setTimeout(() => localController.abort(), 2000);
-      const res = await fetch('http://127.0.0.1:9000/health', {
+      const backendCaptureController = new AbortController();
+      const bTimeoutId = setTimeout(() => backendCaptureController.abort(), 2000);
+      const res = await fetch('/api/capture/status', {
         method: 'GET',
-        signal: localController.signal
+        signal: backendCaptureController.signal
       });
-      clearTimeout(localTimeoutId);
+      clearTimeout(bTimeoutId);
       if (res.ok) {
         const data = await res.json();
-        if (data && (data.status === 'OK' || data.can_capture !== undefined)) {
+        if (data && data.status === 'ONLINE' && data.agent_details) {
           setAgentStatus('connected');
-          setAgentInfo(data);
+          setAgentInfo(data.agent_details);
           return true;
         }
       }
     } catch {
-      // Local agent on 127.0.0.1:9000 not reachable or blocked by browser policy
+      // Continue to Priority 3
     }
 
-    // Priority 2: Fallback to backend WebSocket Hub status for matching OS agent
+    // Priority 3: Fallback check for remote WebSocket hub (/api/agent/status)
+    // (Only executed when apiBase is configured, e.g. deployed environments like Vercel)
     const apiBase = import.meta.env.VITE_API_BASE ?? '';
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-      const backendUrls = [];
-      const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
-      if (apiBase) backendUrls.push(`${apiBase}/api/agent/status${queryParam}`);
-      backendUrls.push(`/api/agent/status${queryParam}`);
-      if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        backendUrls.push(`http://127.0.0.1:8000/api/agent/status${queryParam}`);
-      }
-
-      for (const url of backendUrls) {
-        try {
-          const res = await fetch(url, {
-            method: 'GET',
-            headers: {
-              'X-Client-OS': clientOS,
-            },
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          if (res.ok) {
-            const data = await res.json();
-            // Only accept remote agent status if it matches our client OS!
-            // Do NOT let an unrelated remote agent override local availability.
-            if (data && data.status === 'connected' && data.matched_client_os) {
-              setAgentStatus('connected');
-              setAgentInfo({
-                version: data.version || '1.0.0',
-                os: data.os,
-                can_capture: data.can_capture,
-                status: 'OK',
-              });
-              return true;
-            }
+    if (apiBase) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
+        const res = await fetch(`${apiBase}/api/agent/status${queryParam}`, {
+          method: 'GET',
+          headers: {
+            'X-Client-OS': clientOS,
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.status === 'connected' && data.matched_client_os) {
+            setAgentStatus('connected');
+            setAgentInfo({
+              version: data.version || '1.0.0',
+              os: data.os,
+              can_capture: data.can_capture,
+              status: 'OK',
+            });
+            return true;
           }
-        } catch {
-          // Try next URL
         }
+      } catch {
+        // Silently handle errors
       }
-      clearTimeout(timeoutId);
-    } catch {
-      // Silently handle errors
     }
 
     setAgentStatus('not_detected');
     setAgentInfo(null);
     return false;
-  };
+  }, [clientOS]);
 
   // Check agent health on initial mount, on window focus, and periodically
   useEffect(() => {
@@ -171,7 +195,7 @@ export default function OverviewScreen({
       window.removeEventListener('focus', handleFocus);
       clearInterval(interval);
     };
-  }, []);
+  }, [checkAgentHealth]);
 
   // SINGLE SOURCE OF TRUTH: All metrics derive directly from analyzedPcaps[]
   const pcapList = Array.isArray(analyzedPcaps) && analyzedPcaps.length > 0

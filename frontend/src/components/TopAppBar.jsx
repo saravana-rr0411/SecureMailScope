@@ -7,7 +7,7 @@ export default function TopAppBar({
   onToggleTheme,
   userRole = ROLES.SOC_ANALYST,
   userEmail = '',
-  onLogout,
+  _onLogout,
 }) {
   const isExecutive = userRole === ROLES.EXECUTIVE;
 
@@ -37,7 +37,7 @@ export default function TopAppBar({
       <div className="flex items-center gap-3">
         <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-sans text-[10px] font-semibold text-slate-600 dark:text-slate-300 tracking-wider uppercase">
           <span className={`w-1.5 h-1.5 rounded-full ${isExecutive ? 'bg-indigo-500' : 'bg-emerald-500'}`}></span>
-          <span>{isExecutive ? 'Executive Workstation' : 'SOC Workstation'}</span>
+          <span>{isExecutive ? 'Executive' : 'SOC Analyst'}</span>
         </div>
 
         {userEmail && (
@@ -58,19 +58,6 @@ export default function TopAppBar({
             {theme === 'dark' ? 'light_mode' : 'dark_mode'}
           </span>
         </button>
-
-        {/* Quick Sign Out Action */}
-        {onLogout && (
-          <button
-            type="button"
-            onClick={onLogout}
-            aria-label="Sign out"
-            title="Sign out"
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all duration-150 cursor-pointer shadow-2xs"
-          >
-            <span className="material-symbols-outlined text-[17px]">logout</span>
-          </button>
-        )}
       </div>
     </header>
   );
