@@ -23,32 +23,32 @@ _client_instance: Optional[Client] = None
 
 def get_supabase_credentials() -> tuple[str, str]:
     """
-    Retrieves and validates SUPABASE_URL and SUPABASE_KEY from environment variables.
+    Retrieves and validates SUPABASE_URL and SUPABASE_KEY / SUPABASE_SERVICE_ROLE_KEY from environment variables.
     Fails clearly if either is missing or unconfigured.
     Credentials remain backend-only.
     """
     supabase_url = os.getenv("SUPABASE_URL", "").strip()
-    supabase_key = os.getenv("SUPABASE_KEY", "").strip()
+    supabase_key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")).strip()
 
     missing = []
     if not supabase_url:
         missing.append("SUPABASE_URL")
     if not supabase_key:
-        missing.append("SUPABASE_KEY")
+        missing.append("SUPABASE_KEY or SUPABASE_SERVICE_ROLE_KEY")
 
     if missing:
         raise RuntimeError(
             f"Missing required Supabase environment variable(s): {', '.join(missing)}. "
-            "Please configure SUPABASE_URL and SUPABASE_KEY in your backend .env file or environment."
+            "Please configure SUPABASE_URL and SUPABASE_KEY (or SUPABASE_SERVICE_ROLE_KEY) in your backend .env file or environment."
         )
 
     return supabase_url, supabase_key
 
 
 def is_supabase_configured() -> bool:
-    """Returns True if both SUPABASE_URL and SUPABASE_KEY are present in the environment."""
+    """Returns True if both SUPABASE_URL and SUPABASE_KEY / SUPABASE_SERVICE_ROLE_KEY are present in the environment."""
     url = os.getenv("SUPABASE_URL", "").strip()
-    key = os.getenv("SUPABASE_KEY", "").strip()
+    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")).strip()
     return bool(url and key)
 
 

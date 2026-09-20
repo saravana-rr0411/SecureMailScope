@@ -23,6 +23,12 @@ from app.storage.repository import (
     get_available_periods,
     get_dashboard_trends,
 )
+from app.storage.pcap_storage import (
+    generate_safe_pcap_storage_path,
+    upload_pcap_to_storage,
+    download_pcap_from_storage,
+    pcap_exists_in_storage,
+)
 from app.capture.agent_client import (
     request_authentic_pcap,
     get_capture_agent_status,
@@ -115,13 +121,36 @@ async def analyze_pcap_endpoint(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, tmp)
             tmp_path = tmp.name
 
-        # Process the PCAP file
+        # Read raw PCAP bytes for persistent storage and memory cache
+        with open(tmp_path, "rb") as f:
+            pcap_raw_bytes = f.read()
+
+        # Process the PCAP file through existing forensic pipeline
         result = analyze_pcap(tmp_path)
         
         # Canonical metadata
         result["filename"] = file.filename
         result["capture_id"] = f"pcap_{file.filename}"
         result["analyzed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        result["pcap_filename"] = file.filename
+        result["pcap_size_bytes"] = len(pcap_raw_bytes)
+        result["pcap_download_url"] = f"/api/capture/download/{result['capture_id']}"
+
+        # Generate safe collision-safe path for Supabase Storage
+        storage_path = generate_safe_pcap_storage_path(file.filename, result["capture_id"])
+        result["pcap_storage_path"] = storage_path
+
+        # Upload original PCAP to private Supabase 'pcaps' bucket
+        if is_supabase_configured():
+            try:
+                upload_pcap_to_storage(storage_path, pcap_raw_bytes)
+                logger.info(f"Original PCAP persisted to Supabase Storage: {storage_path}")
+            except Exception as storage_upload_err:
+                logger.error(f"Supabase Storage upload failure: {storage_upload_err}")
+                raise HTTPException(status_code=502, detail=f"Supabase Storage upload failure: {str(storage_upload_err)}")
+
+        # Store in-memory cache for fast immediate download
+        store_pcap_for_download(result["capture_id"], file.filename, pcap_raw_bytes)
 
         # Persist into Supabase persistent storage
         if is_supabase_configured():
@@ -134,6 +163,8 @@ async def analyze_pcap_endpoint(file: UploadFile = File(...)):
             logger.info("Supabase storage skipped: SUPABASE_URL or SUPABASE_KEY not configured in environment.")
 
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -592,6 +623,15 @@ async def generate_authentic_capture_endpoint(
             result["pcap_download_url"] = f"/api/capture/download/{result['capture_id']}"
             store_pcap_for_download(result["capture_id"], filename, pcap_raw_bytes)
 
+            storage_path = generate_safe_pcap_storage_path(filename, result["capture_id"])
+            result["pcap_storage_path"] = storage_path
+            if is_supabase_configured():
+                try:
+                    upload_pcap_to_storage(storage_path, pcap_raw_bytes)
+                    logger.info(f"Authentic capture PCAP uploaded to Supabase Storage: {storage_path}")
+                except Exception as upload_err:
+                    logger.warning(f"Supabase Storage upload warning during authentic capture: {upload_err}")
+
         # Persist into Supabase persistent storage
         if is_supabase_configured():
             try:
@@ -621,16 +661,21 @@ async def generate_authentic_capture_endpoint(
 
 
 @app.get("/api/capture/download/{capture_id}")
-def download_capture_endpoint(capture_id: str):
+def download_capture_endpoint(capture_id: str, storage_path: Optional[str] = Query(None)):
     """
-    Downloads genuine PCAP binary for a generated authentic capture or whitelisted demo.
+    Downloads genuine PCAP binary for a generated authentic capture, uploaded PCAP, or whitelisted demo.
     Validates capture_id against directory traversal attacks.
+    Streams binary directly from persistent Supabase Storage 'pcaps' bucket,
+    with fallback to in-memory cache and local demo datasets.
     """
     # Strict validation: alphanumeric, dashes, underscores, dots only; reject path traversal
     if not re.match(r"^[a-zA-Z0-9_\-\.]+$", capture_id) or ".." in capture_id:
         raise HTTPException(status_code=400, detail="Invalid capture identifier.")
 
-    # 1. Check in-memory store for recently captured PCAPs
+    if storage_path and (".." in storage_path or not re.match(r"^[a-zA-Z0-9_\-\.]+$", storage_path)):
+        raise HTTPException(status_code=400, detail="Invalid storage path identifier.")
+
+    # 1. Check in-memory store for recently captured PCAPs (fast cache)
     if capture_id in _recent_pcaps:
         pcap_bytes, filename = _recent_pcaps[capture_id]
         return Response(
@@ -642,7 +687,69 @@ def download_capture_endpoint(capture_id: str):
             }
         )
 
-    # 2. Check demo captures whitelist fallback
+    # 2. Check Supabase Storage (persistent source of truth across serverless/Vercel)
+    if is_supabase_configured():
+        target_storage_path = storage_path
+        target_filename = None
+
+        # Look up capture metadata in database if storage_path not provided
+        if not target_storage_path:
+            try:
+                capture_meta = get_analysis_result(capture_id)
+                if not capture_meta and capture_id.startswith("pcap_"):
+                    capture_meta = get_analysis_result(capture_id[5:])
+                elif not capture_meta and not capture_id.startswith("pcap_"):
+                    capture_meta = get_analysis_result(f"pcap_{capture_id}")
+
+                if capture_meta:
+                    target_storage_path = capture_meta.get("pcap_storage_path")
+                    target_filename = capture_meta.get("pcap_filename") or capture_meta.get("filename")
+            except Exception as db_err:
+                logger.warning(f"Could not retrieve capture metadata from DB for {capture_id}: {db_err}")
+
+        # If storage path found from DB or passed directly
+        if target_storage_path:
+            try:
+                pcap_bytes = download_pcap_from_storage(target_storage_path)
+                if pcap_bytes is not None:
+                    dl_filename = target_filename or target_storage_path
+                    if not dl_filename.lower().endswith(('.pcap', '.pcapng')):
+                        dl_filename = f"{dl_filename}.pcap"
+                    # Cache in memory for subsequent requests
+                    store_pcap_for_download(capture_id, dl_filename, pcap_bytes)
+                    return Response(
+                        content=pcap_bytes,
+                        media_type="application/vnd.tcpdump.pcap",
+                        headers={
+                            "Content-Disposition": f'attachment; filename="{dl_filename}"',
+                            "Content-Length": str(len(pcap_bytes)),
+                        }
+                    )
+            except RuntimeError as storage_err:
+                raise HTTPException(status_code=502, detail=str(storage_err))
+
+        # Fallback: check if capture_id itself exists directly in 'pcaps' bucket
+        direct_candidates = [capture_id]
+        if not capture_id.lower().endswith(('.pcap', '.pcapng')):
+            direct_candidates.append(f"{capture_id}.pcap")
+
+        for candidate in direct_candidates:
+            try:
+                pcap_bytes = download_pcap_from_storage(candidate)
+                if pcap_bytes is not None:
+                    store_pcap_for_download(capture_id, candidate, pcap_bytes)
+                    return Response(
+                        content=pcap_bytes,
+                        media_type="application/vnd.tcpdump.pcap",
+                        headers={
+                            "Content-Disposition": f'attachment; filename="{candidate}"',
+                            "Content-Length": str(len(pcap_bytes)),
+                        }
+                    )
+            except RuntimeError as storage_err:
+                raise HTTPException(status_code=502, detail=str(storage_err))
+
+    # 3. Check demo captures whitelist fallback
     for demo_key, demo_file in DEMO_CAPTURES_WHITELIST.items():
         if capture_id in (demo_key, demo_file, f"pcap_{demo_file}"):
             pcap_path = os.path.join(DATASET_DIR, demo_file)
@@ -658,7 +765,7 @@ def download_capture_endpoint(capture_id: str):
                     }
                 )
 
-    raise HTTPException(status_code=404, detail="Capture file not found or expired.")
+    raise HTTPException(status_code=404, detail="PCAP file not found or expired.")
 
 
 

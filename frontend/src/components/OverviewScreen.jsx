@@ -701,7 +701,7 @@ export default function OverviewScreen({
                 <span className="material-symbols-outlined text-[15px] text-[#006591] dark:text-sky-400 shrink-0">description</span>
                 <span className="truncate">{activeCapture?.filename || 'No capture selected'}</span>
               </div>
-              {(activeCapture?.pcap_base64 || activeCapture?.pcap_download_url || (activeCapture?.capture_source === 'AUTHENTIC_AUTO_CAPTURE' && activeCapture?.capture_id)) && (
+              {(activeCapture?.pcap_base64 || activeCapture?.pcap_download_url || activeCapture?.pcap_storage_path || (activeCapture?.capture_source === 'AUTHENTIC_AUTO_CAPTURE' && activeCapture?.capture_id)) && (
                 <button
                   type="button"
                   id="btn-download-selected-pcap"
@@ -723,7 +723,7 @@ export default function OverviewScreen({
                     } else {
                       const dlUrl = activeCapture.pcap_download_url
                         ? (activeCapture.pcap_download_url.startsWith('http') ? activeCapture.pcap_download_url : `${apiBase}${activeCapture.pcap_download_url}`)
-                        : `${apiBase}/api/capture/download/${activeCapture.capture_id || activeCapture.filename}`;
+                        : `${apiBase}/api/capture/download/${activeCapture.capture_id || activeCapture.filename}${activeCapture.pcap_storage_path ? `?storage_path=${encodeURIComponent(activeCapture.pcap_storage_path)}` : ''}`;
                       window.open(dlUrl, '_blank');
                     }
                   }}

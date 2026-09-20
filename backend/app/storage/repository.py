@@ -2,6 +2,7 @@ import datetime
 import logging
 from typing import List, Dict, Any, Optional
 from app.storage.supabase_client import get_supabase_client, is_supabase_configured
+from app.storage.pcap_storage import delete_pcap_from_storage
 
 logger = logging.getLogger("securemailscope.storage")
 TABLE_NAME = "analysis_results"
@@ -184,6 +185,17 @@ def extract_storage_row(result: Dict[str, Any]) -> Dict[str, Any]:
         # Default to integer posture score (0-100)
         sec_posture_val = posture_score
 
+    pcap_storage_path = result.get("pcap_storage_path")
+    if pcap_storage_path:
+        findings.append({
+            "finding_id": "META_PCAP_STORAGE",
+            "title": "PCAP Storage Path",
+            "pcap_storage_path": str(pcap_storage_path),
+            "filename": str(filename),
+            "category": "METADATA",
+            "severity": "INFORMATIONAL"
+        })
+
     row = {
         "capture_id": str(capture_id),
         "filename": str(filename),
@@ -199,6 +211,9 @@ def extract_storage_row(result: Dict[str, Any]) -> Dict[str, Any]:
         "certificate_status": str(certificate_status),
         "findings": findings,
     }
+
+    if "pcap_storage_path" in schema and pcap_storage_path:
+        row["pcap_storage_path"] = str(pcap_storage_path)
 
     return row
 
@@ -227,9 +242,19 @@ def format_db_row_to_capture(row: Dict[str, Any]) -> Dict[str, Any]:
     tls_version = row.get("tls_version")
     cipher = row.get("cipher")
     certificate_status = row.get("certificate_status") or "NOT_OBSERVABLE"
-    findings = row.get("findings") or []
-    if not isinstance(findings, list):
-        findings = []
+    pcap_storage_path = row.get("pcap_storage_path")
+    raw_findings = row.get("findings") or []
+    if not isinstance(raw_findings, list):
+        raw_findings = []
+
+    # Separate storage metadata from forensic findings to keep UI pure
+    findings = []
+    for f in raw_findings:
+        if isinstance(f, dict) and f.get("finding_id") == "META_PCAP_STORAGE":
+            if not pcap_storage_path:
+                pcap_storage_path = f.get("pcap_storage_path")
+        else:
+            findings.append(f)
 
     # Derive numeric score and string posture cleanly
     if isinstance(security_posture, (int, float)):
@@ -257,6 +282,9 @@ def format_db_row_to_capture(row: Dict[str, Any]) -> Dict[str, Any]:
         "id": row.get("id"),
         "capture_id": capture_id,
         "filename": filename,
+        "pcap_storage_path": pcap_storage_path,
+        "pcap_download_url": f"/api/capture/download/{capture_id}" if capture_id else None,
+        "pcap_filename": filename,
         "protocol": protocol,
         "protocols": [{"protocol": protocol, "confidence": "HIGH"}] if protocol else [],
         "analyzed_at": analyzed_at,
@@ -392,10 +420,18 @@ def get_analysis_result(capture_id: str) -> Optional[Dict[str, Any]]:
 
 def delete_analysis_result(capture_id: str) -> bool:
     """
-    Deletes an analysis result by capture_id from Supabase.
+    Deletes an analysis result by capture_id from Supabase and removes
+    any associated PCAP object from the private 'pcaps' bucket.
     Returns True if deleted, False otherwise.
     """
     client = get_supabase_client()
+    capture = get_analysis_result(capture_id)
+    if capture and capture.get("pcap_storage_path"):
+        try:
+            delete_pcap_from_storage(capture["pcap_storage_path"])
+        except Exception as storage_err:
+            logger.warning(f"Could not delete storage PCAP for '{capture_id}': {storage_err}")
+
     response = client.table(TABLE_NAME).delete().eq("capture_id", capture_id).execute()
     return bool(response.data and len(response.data) > 0)
 

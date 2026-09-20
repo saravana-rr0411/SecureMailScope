@@ -149,6 +149,13 @@ export default function ForensicsScreen({
           : `${apiBase}${capture.pcap_download_url}`
       );
     }
+    if (capture.pcap_storage_path) {
+      const sp = encodeURIComponent(capture.pcap_storage_path);
+      if (apiBase) {
+        candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(targetId)}?storage_path=${sp}`);
+      }
+      candidateUrls.push(`/api/capture/download/${encodeURIComponent(targetId)}?storage_path=${sp}`);
+    }
     if (apiBase) {
       candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(targetId)}`);
       if (capture.filename && capture.filename !== targetId) {
@@ -170,6 +177,7 @@ export default function ForensicsScreen({
     const uniqueUrls = [...new Set(candidateUrls)];
 
     let downloaded = false;
+    let lastErrorMessage = null;
     for (const url of uniqueUrls) {
       try {
         const res = await fetch(url);
@@ -185,6 +193,11 @@ export default function ForensicsScreen({
           setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 2000);
           downloaded = true;
           break;
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson && errJson.detail) {
+            lastErrorMessage = errJson.detail;
+          }
         }
       } catch (fetchErr) {
         console.warn(`Failed to download PCAP from ${url}:`, fetchErr);
@@ -193,7 +206,7 @@ export default function ForensicsScreen({
 
     setIsDownloadingPcap(false);
     if (!downloaded) {
-      setPcapDownloadError("Raw PCAP file is not available on backend or has expired from cache.");
+      setPcapDownloadError(lastErrorMessage || "Raw PCAP file is not available in storage or has expired from cache.");
       setTimeout(() => setPcapDownloadError(null), 4000);
     }
   };

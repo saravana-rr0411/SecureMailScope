@@ -26,3 +26,7 @@ create policy "Users can read own role"
 -- Therefore, normal authenticated users CANNOT modify or elevate their own roles.
 -- Only server-side admin operations using the service_role key or direct database
 -- administration can insert or modify role assignments.
+
+-- 5. Persistent PCAP Storage Column for table public.analysis_results
+-- Allows direct storage path reference to private Supabase Storage bucket 'pcaps'.
+alter table if exists public.analysis_results add column if not exists pcap_storage_path text;
