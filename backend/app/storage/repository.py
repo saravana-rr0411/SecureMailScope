@@ -406,14 +406,50 @@ def get_analysis_results() -> List[Dict[str, Any]]:
 
 def get_analysis_result(capture_id: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieves a single analysis result by capture_id from Supabase.
+    Retrieves a single analysis result by identifier (capture_id, numeric id, filename, or storage_path) from Supabase.
     Returns formatted capture dictionary or None if not found.
     """
     client = get_supabase_client()
-    response = client.table(TABLE_NAME).select("*").eq("capture_id", capture_id).execute()
+    cid_str = str(capture_id).strip()
 
+    # 1. Direct lookup by capture_id
+    response = client.table(TABLE_NAME).select("*").eq("capture_id", cid_str).limit(1).execute()
     if response.data and len(response.data) > 0:
         return format_db_row_to_capture(response.data[0])
+
+    # 2. Lookup by numeric database id if identifier is integer digits
+    if cid_str.isdigit():
+        try:
+            num_resp = client.table(TABLE_NAME).select("*").eq("id", int(cid_str)).limit(1).execute()
+            if num_resp.data and len(num_resp.data) > 0:
+                return format_db_row_to_capture(num_resp.data[0])
+        except Exception:
+            pass
+
+    # 3. Lookup by filename
+    fn_resp = client.table(TABLE_NAME).select("*").eq("filename", cid_str).limit(1).execute()
+    if fn_resp.data and len(fn_resp.data) > 0:
+        return format_db_row_to_capture(fn_resp.data[0])
+
+    # 4. If identifier starts with pcap_, try without prefix against filename
+    if cid_str.startswith("pcap_"):
+        raw_name = cid_str[5:]
+        sub_resp = client.table(TABLE_NAME).select("*").eq("filename", raw_name).limit(1).execute()
+        if sub_resp.data and len(sub_resp.data) > 0:
+            return format_db_row_to_capture(sub_resp.data[0])
+    else:
+        # If identifier does not start with pcap_, try with pcap_ prefix against capture_id
+        pref_resp = client.table(TABLE_NAME).select("*").eq("capture_id", f"pcap_{cid_str}").limit(1).execute()
+        if pref_resp.data and len(pref_resp.data) > 0:
+            return format_db_row_to_capture(pref_resp.data[0])
+
+    # 5. Lookup by pcap_storage_path
+    try:
+        sp_resp = client.table(TABLE_NAME).select("*").eq("pcap_storage_path", cid_str).limit(1).execute()
+        if sp_resp.data and len(sp_resp.data) > 0:
+            return format_db_row_to_capture(sp_resp.data[0])
+    except Exception:
+        pass
 
     return None
 

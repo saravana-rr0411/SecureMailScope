@@ -140,37 +140,51 @@ export default function ForensicsScreen({
     setIsDownloadingPcap(true);
     setPcapDownloadError(null);
 
-    const apiBase = import.meta.env.VITE_API_BASE ?? '';
+    const apiBase = (import.meta.env.VITE_API_BASE ?? '').trim().replace(/\/+$/, '');
     const candidateUrls = [];
+
+    // Helper to resolve URLs with or without apiBase
+    const addUrl = (path) => {
+      if (!path) return;
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        candidateUrls.push(path);
+      } else {
+        const cleanPath = path.startsWith('/') ? path : `/${path}`;
+        if (apiBase) {
+          candidateUrls.push(`${apiBase}${cleanPath}`);
+        } else {
+          candidateUrls.push(cleanPath);
+        }
+      }
+    };
+
+    // 1. Direct download URL provided in backend analysis payload
     if (capture.pcap_download_url) {
-      candidateUrls.push(
-        capture.pcap_download_url.startsWith('http')
-          ? capture.pcap_download_url
-          : `${apiBase}${capture.pcap_download_url}`
-      );
+      addUrl(capture.pcap_download_url);
     }
+
+    // 2. Download with explicit storage_path parameter
     if (capture.pcap_storage_path) {
       const sp = encodeURIComponent(capture.pcap_storage_path);
-      if (apiBase) {
-        candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(targetId)}?storage_path=${sp}`);
-      }
-      candidateUrls.push(`/api/capture/download/${encodeURIComponent(targetId)}?storage_path=${sp}`);
+      addUrl(`/api/capture/download/${encodeURIComponent(targetId)}?storage_path=${sp}`);
     }
-    if (apiBase) {
-      candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(targetId)}`);
-      if (capture.filename && capture.filename !== targetId) {
-        candidateUrls.push(`${apiBase}/api/capture/download/${encodeURIComponent(capture.filename)}`);
-      }
+
+    // 3. Download by primary target ID
+    addUrl(`/api/capture/download/${encodeURIComponent(targetId)}`);
+
+    // 4. Download by capture_id if distinct
+    if (capture.capture_id && capture.capture_id !== targetId) {
+      addUrl(`/api/capture/download/${encodeURIComponent(capture.capture_id)}`);
     }
-    candidateUrls.push(`/api/capture/download/${encodeURIComponent(targetId)}`);
+
+    // 5. Download by filename if distinct
     if (capture.filename && capture.filename !== targetId) {
-      candidateUrls.push(`/api/capture/download/${encodeURIComponent(capture.filename)}`);
+      addUrl(`/api/capture/download/${encodeURIComponent(capture.filename)}`);
     }
+
+    // 6. Local development direct port fallback
     if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
       candidateUrls.push(`http://127.0.0.1:8000/api/capture/download/${encodeURIComponent(targetId)}`);
-      if (capture.filename && capture.filename !== targetId) {
-        candidateUrls.push(`http://127.0.0.1:8000/api/capture/download/${encodeURIComponent(capture.filename)}`);
-      }
     }
 
     // Deduplicate candidate URLs
