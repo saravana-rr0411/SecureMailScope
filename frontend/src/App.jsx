@@ -686,10 +686,12 @@ export default function App() {
       ) {
         setError("Failed to connect to SecureMailScope backend. Please verify that the backend server is running.");
       } else if (
-        msg.toLowerCase().includes('contains no packets') ||
-        msg.toLowerCase().includes('no smtp submission packets') ||
-        msg.toLowerCase().includes('no gmail smtp submission traffic') ||
-        msg.toLowerCase().includes('empty or invalid pcap')
+        isGmail && (
+          msg.toLowerCase().includes('contains no packets') ||
+          msg.toLowerCase().includes('no smtp submission packets') ||
+          msg.toLowerCase().includes('no gmail smtp submission traffic') ||
+          msg.toLowerCase().includes('empty or invalid pcap')
+        )
       ) {
         setError("No Gmail SMTP submission traffic detected during the capture window. Send an email using your configured desktop mail client while capture is active.");
       } else {
