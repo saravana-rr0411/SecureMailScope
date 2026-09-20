@@ -5,6 +5,7 @@ import {
   getAiRiskExplanation,
   getAiRiskExplanationStyle
 } from '../utils/securityStats';
+import { getAuthHeaders } from '../utils/supabaseClient';
 
 const PIPELINE_STAGE_METADATA = {
   1: { num: '01', name: 'PCAP' },
@@ -194,7 +195,8 @@ export default function ForensicsScreen({
     let lastErrorMessage = null;
     for (const url of uniqueUrls) {
       try {
-        const res = await fetch(url);
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, { headers });
         if (res.ok) {
           const blob = await res.blob();
           const downloadUrl = window.URL.createObjectURL(blob);

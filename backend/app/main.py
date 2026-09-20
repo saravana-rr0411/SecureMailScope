@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, Request, Query, status as http_status
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, WebSocket, WebSocketDisconnect, Request, Query, Security, Depends, status as http_status
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional, Tuple
@@ -35,6 +35,7 @@ from app.capture.agent_client import (
     is_capture_agent_configured,
 )
 from app.capture.agent_hub import agent_hub, normalize_os
+from app.auth.auth_handler import require_soc_or_executive
 
 logger = logging.getLogger("securemailscope")
 
@@ -110,7 +111,7 @@ def health_check():
 
 
 @app.post("/api/pcap/analyze")
-async def analyze_pcap_endpoint(file: UploadFile = File(...)):
+async def analyze_pcap_endpoint(file: UploadFile = File(...), user: dict = Security(require_soc_or_executive)):
     if not file.filename.lower().endswith(('.pcap', '.pcapng')):
         raise HTTPException(status_code=400, detail="Unsupported file extension. Only .pcap and .pcapng are allowed.")
     
@@ -217,7 +218,7 @@ def analyze_demo_pcap_endpoint(demo_name: str):
 
 
 @app.get("/api/captures")
-def get_captures_endpoint():
+def get_captures_endpoint(user: dict = Security(require_soc_or_executive)):
     """
     Retrieves stored analysis history from Supabase table 'analysis_results'.
     Returns stored analysis results in format compatible with frontend state.
@@ -233,7 +234,7 @@ def get_captures_endpoint():
 
 
 @app.get("/api/captures/{capture_id}")
-def get_capture_endpoint(capture_id: str):
+def get_capture_endpoint(capture_id: str, user: dict = Security(require_soc_or_executive)):
     """
     Retrieves a single stored analysis result by capture_id from Supabase.
     """
@@ -252,7 +253,7 @@ def get_capture_endpoint(capture_id: str):
 
 
 @app.delete("/api/captures/{capture_id}")
-def delete_capture_endpoint(capture_id: str):
+def delete_capture_endpoint(capture_id: str, user: dict = Security(require_soc_or_executive)):
     """
     Deletes a stored analysis result by capture_id from Supabase.
     """
@@ -271,7 +272,7 @@ def delete_capture_endpoint(capture_id: str):
 
 
 @app.get("/api/dashboard/periods")
-def get_dashboard_periods_endpoint():
+def get_dashboard_periods_endpoint(user: dict = Security(require_soc_or_executive)):
     """
     Retrieves available filter periods (dates and months) generated dynamically
     from actual 'analysis_results.analyzed_at' values in Supabase.
@@ -290,7 +291,8 @@ def get_dashboard_periods_endpoint():
 def get_dashboard_trends_endpoint(
     period: str = "daily",
     date: Optional[str] = None,
-    month: Optional[str] = None
+    month: Optional[str] = None,
+    user: dict = Security(require_soc_or_executive)
 ):
     """
     Retrieves trend and security status aggregation points for the Executive Dashboard graphs
@@ -661,7 +663,7 @@ async def generate_authentic_capture_endpoint(
 
 
 @app.get("/api/capture/download/{capture_id}")
-def download_capture_endpoint(capture_id: str, storage_path: Optional[str] = Query(None)):
+def download_capture_endpoint(capture_id: str, storage_path: Optional[str] = Query(None), user: dict = Security(require_soc_or_executive)):
     """
     Downloads genuine PCAP binary for a generated authentic capture, uploaded PCAP, or whitelisted demo.
     Validates capture_id against directory traversal attacks.

@@ -53,3 +53,20 @@ export async function signOutUser() {
     console.error('Error signing out:', err);
   }
 }
+
+/**
+ * Retrieves the authorization headers for backend API requests.
+ */
+export async function getAuthHeaders() {
+  if (!supabase) return {};
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (token) {
+      return { Authorization: `Bearer ${token}` };
+    }
+  } catch (err) {
+    console.warn('Error fetching auth token for headers:', err);
+  }
+  return {};
+}

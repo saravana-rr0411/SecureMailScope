@@ -8,7 +8,7 @@ import LoginScreen from './components/LoginScreen';
 import BrandEmblem from './components/BrandEmblem';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from './reportGenerator';
 import { deriveSecurityStats } from './utils/securityStats';
-import { supabase, isSupabaseConfigured, fetchUserRole, signOutUser } from './utils/supabaseClient';
+import { supabase, isSupabaseConfigured, fetchUserRole, signOutUser, getAuthHeaders } from './utils/supabaseClient';
 import {
   ROLES,
   ROUTES,
@@ -305,7 +305,8 @@ export default function App() {
     let isMounted = true;
     async function syncCapturesFromBackend() {
       try {
-        const res = await fetch(`${API_BASE}/api/captures`);
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/captures`, { headers });
         if (res.ok) {
           const backendCaptures = await res.json();
           if (isMounted && Array.isArray(backendCaptures) && backendCaptures.length > 0) {
@@ -427,15 +428,19 @@ export default function App() {
     try {
       let res;
       try {
+        const headers = await getAuthHeaders();
         res = await fetch(`${API_BASE}/api/pcap/analyze`, {
           method: 'POST',
-          body: formData
+          body: formData,
+          headers
         });
       } catch (primaryErr) {
         if (API_BASE) {
+          const headers = await getAuthHeaders();
           res = await fetch("/api/pcap/analyze", {
             method: 'POST',
-            body: formData
+            body: formData,
+            headers
           });
         } else {
           throw primaryErr;
@@ -555,9 +560,11 @@ export default function App() {
 
       for (const url of urls) {
         try {
+          const headers = await getAuthHeaders();
           res = await fetch(url, {
             method: 'POST',
             headers: {
+              ...headers,
               'Content-Type': 'application/json',
               'X-Client-OS': clientOS,
             },

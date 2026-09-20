@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { deriveSecurityStats, getPcapSecurityPosture, scoreToRiskTier, getAiRiskTier } from '../utils/securityStats';
+import { getAuthHeaders } from '../utils/supabaseClient';
 
 const NPCAP_OFFICIAL_URL = "https://npcap.com/#download";
 
@@ -98,9 +99,14 @@ export default function OverviewScreen({
       try {
         const localController = new AbortController();
         const localTimeoutId = setTimeout(() => localController.abort(), 2000);
+        const headers = await getAuthHeaders();
         const res = await fetch(endpoint, {
           method: 'GET',
-          signal: localController.signal
+          headers: {
+            ...headers,
+            'Accept': 'application/json',
+          },
+          signal: localController.signal,
         });
         clearTimeout(localTimeoutId);
         if (res.ok) {
@@ -122,9 +128,14 @@ export default function OverviewScreen({
     try {
       const backendCaptureController = new AbortController();
       const bTimeoutId = setTimeout(() => backendCaptureController.abort(), 2000);
+      const headers = await getAuthHeaders();
       const res = await fetch('/api/capture/status', {
         method: 'GET',
-        signal: backendCaptureController.signal
+        headers: {
+          ...headers,
+          'Accept': 'application/json',
+        },
+        signal: backendCaptureController.signal,
       });
       clearTimeout(bTimeoutId);
       if (res.ok) {
@@ -147,12 +158,15 @@ export default function OverviewScreen({
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
         const queryParam = `?client_os=${encodeURIComponent(clientOS)}`;
+        const headers = await getAuthHeaders();
         const res = await fetch(`${apiBase}/api/agent/status${queryParam}`, {
           method: 'GET',
           headers: {
+            ...headers,
             'X-Client-OS': clientOS,
+            'Accept': 'application/json',
           },
-          signal: controller.signal
+          signal: controller.signal,
         });
         clearTimeout(timeoutId);
         if (res.ok) {

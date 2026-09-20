@@ -3,6 +3,9 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import logging
+
+logger = logging.getLogger("securemailscope")
 
 # Automatically find and load .env from project root, current directory, or backend directory
 _current_file = Path(__file__).resolve()
@@ -28,7 +31,15 @@ def get_supabase_credentials() -> tuple[str, str]:
     Credentials remain backend-only.
     """
     supabase_url = os.getenv("SUPABASE_URL", "").strip()
-    supabase_key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")).strip()
+    supabase_service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    supabase_anon_key = os.getenv("SUPABASE_KEY", "").strip()
+    supabase_key = supabase_service_key or supabase_anon_key
+
+    if supabase_url and not supabase_service_key and supabase_anon_key:
+        logger.warning(
+            "SUPABASE_SERVICE_ROLE_KEY is not configured! Using SUPABASE_KEY (anon key) instead. "
+            "If the 'pcaps' bucket is PRIVATE with no RLS SELECT policy, PCAP downloads will fail with a 404 error."
+        )
 
     missing = []
     if not supabase_url:
@@ -48,7 +59,16 @@ def get_supabase_credentials() -> tuple[str, str]:
 def is_supabase_configured() -> bool:
     """Returns True if both SUPABASE_URL and SUPABASE_KEY / SUPABASE_SERVICE_ROLE_KEY are present in the environment."""
     url = os.getenv("SUPABASE_URL", "").strip()
-    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")).strip()
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    anon_key = os.getenv("SUPABASE_KEY", "").strip()
+    key = service_key or anon_key
+
+    if url and not service_key and anon_key:
+        logger.warning(
+            "SUPABASE_SERVICE_ROLE_KEY is not configured! Using SUPABASE_KEY (anon key) instead. "
+            "If the 'pcaps' bucket is PRIVATE with no RLS SELECT policy, PCAP downloads will fail with a 404 error."
+        )
+
     return bool(url and key)
 
 
