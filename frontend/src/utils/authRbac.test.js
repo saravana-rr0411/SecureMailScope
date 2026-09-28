@@ -10,7 +10,13 @@ import {
   getNavItemsForRole,
   validateLoginRoleMatch,
   canRoleAccessRoute,
+  isValidEmailFormat,
 } from './authRbac.js';
+import {
+  createDemoUser,
+  createDemoSession,
+  DEMO_MODE,
+} from './supabaseClient.js';
 
 test('1. Unauthenticated users cannot access protected routes and are redirected to /login', () => {
   // Test root
@@ -291,5 +297,42 @@ test('18. Sidebar navigation footer contains ONLY sign out action and no visible
   // Verify Sign Out button remains intact
   assert.equal(content.includes('Sign Out'), true);
   assert.equal(content.includes('onLogout'), true);
+});
+
+test('19. isValidEmailFormat accepts valid-looking emails for hackathon demo mode', () => {
+  assert.equal(isValidEmailFormat('test@gmail.com'), true);
+  assert.equal(isValidEmailFormat('evaluator@gmail.com'), true);
+  assert.equal(isValidEmailFormat('abc@xyz.com'), true);
+  assert.equal(isValidEmailFormat('judge.sih@institution.edu'), true);
+  assert.equal(isValidEmailFormat('analyst+test@sub.domain.co.in'), true);
+});
+
+test('20. isValidEmailFormat strictly rejects empty, missing, or malformed email strings', () => {
+  assert.equal(isValidEmailFormat(''), false);
+  assert.equal(isValidEmailFormat('   '), false);
+  assert.equal(isValidEmailFormat(null), false);
+  assert.equal(isValidEmailFormat(undefined), false);
+  assert.equal(isValidEmailFormat('test'), false);
+  assert.equal(isValidEmailFormat('test@'), false);
+  assert.equal(isValidEmailFormat('@domain.com'), false);
+  assert.equal(isValidEmailFormat('test@domain'), false);
+  assert.equal(isValidEmailFormat('test@.com'), false);
+  assert.equal(isValidEmailFormat('test @domain.com'), false);
+});
+
+test('21. Demo mode session and user creation preserve entered email and workstation role', () => {
+  assert.equal(DEMO_MODE, true);
+
+  // SOC Analyst demo session
+  const socSession = createDemoSession('evaluator@gmail.com', ROLES.SOC_ANALYST);
+  assert.equal(socSession.user.email, 'evaluator@gmail.com');
+  assert.equal(socSession.role, ROLES.SOC_ANALYST);
+  assert.ok(socSession.access_token.startsWith('demo-token:'));
+
+  // Executive demo session
+  const execSession = createDemoSession('abc@xyz.com', ROLES.EXECUTIVE);
+  assert.equal(execSession.user.email, 'abc@xyz.com');
+  assert.equal(execSession.role, ROLES.EXECUTIVE);
+  assert.ok(execSession.access_token.startsWith('demo-token:'));
 });
 

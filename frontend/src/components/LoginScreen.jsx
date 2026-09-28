@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase, isSupabaseConfigured, fetchUserRole } from '../utils/supabaseClient';
-import { ROLES, validateLoginRoleMatch } from '../utils/authRbac';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchUserRole,
+  DEMO_MODE,
+  createDemoSession,
+  saveDemoSession,
+} from '../utils/supabaseClient';
+import { ROLES, validateLoginRoleMatch, isValidEmailFormat } from '../utils/authRbac';
 
 /**
  * Dynamic canvas background providing refined, restrained network-node movement
@@ -145,6 +152,33 @@ export default function LoginScreen({ onLoginSuccess, theme = 'light', onToggleT
     setErrorMessage('');
 
     const trimmedEmail = email.trim();
+
+    // DEMO AUTHENTICATION FLOW
+    // Allows logging in with ANY valid-looking email address without requiring
+    // a pre-registered account, email verification, or OTP.
+    if (DEMO_MODE) {
+      // 1. Check only that the email field is not empty and has a basic email format
+      if (!trimmedEmail || !isValidEmailFormat(trimmedEmail)) {
+        setErrorMessage('Invalid credentials.');
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        // Create immediate demo session with entered email & selected workstation role
+        const demoSession = createDemoSession(trimmedEmail, selectedRoleContext);
+        saveDemoSession(demoSession);
+        onLoginSuccess(demoSession.user, selectedRoleContext);
+      } catch (err) {
+        console.error('Demo sign-in error:', err);
+        setErrorMessage('Connection error.');
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // STANDARD SUPABASE AUTH FLOW (active when DEMO_MODE is false)
     if (!trimmedEmail || !password) {
       setErrorMessage('Invalid credentials.');
       return;
@@ -258,8 +292,8 @@ export default function LoginScreen({ onLoginSuccess, theme = 'light', onToggleT
             </div>
           )}
 
-          {/* Configuration Error (Only on actual config problem) */}
-          {!isSupabaseConfigured && (
+          {/* Configuration Error (Only on actual config problem when not in DEMO_MODE) */}
+          {!DEMO_MODE && !isSupabaseConfigured && (
             <div
               role="alert"
               className="mb-4 px-3.5 py-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 text-xs font-medium flex items-center gap-2 animate-in fade-in duration-150"
@@ -350,7 +384,7 @@ export default function LoginScreen({ onLoginSuccess, theme = 'light', onToggleT
                   name="password"
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
-                  required
+                  required={!DEMO_MODE}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"

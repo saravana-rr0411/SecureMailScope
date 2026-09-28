@@ -8,7 +8,16 @@ import LoginScreen from './components/LoginScreen';
 import BrandEmblem from './components/BrandEmblem';
 import { exportJSON, exportXLSX, exportPDF, exportHTML } from './reportGenerator';
 import { deriveSecurityStats } from './utils/securityStats';
-import { supabase, isSupabaseConfigured, fetchUserRole, signOutUser, getAuthHeaders } from './utils/supabaseClient';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchUserRole,
+  signOutUser,
+  getAuthHeaders,
+  DEMO_MODE,
+  getStoredDemoSession,
+  clearDemoSession,
+} from './utils/supabaseClient';
 import {
   ROLES,
   ROUTES,
@@ -82,6 +91,31 @@ export default function App() {
     let isMounted = true;
 
     async function initAuth() {
+      // If DEMO_MODE is active, restore demo session from localStorage if present
+      if (DEMO_MODE) {
+        const storedDemo = getStoredDemoSession();
+        if (storedDemo?.user && storedDemo?.role) {
+          if (isMounted) {
+            setSession(storedDemo);
+            setUser(storedDemo.user);
+            setUserRole(storedDemo.role);
+            setAuthLoading(false);
+          }
+          return;
+        } else {
+          // No active demo session: route unauthenticated user to /login
+          if (isMounted) {
+            setAuthLoading(false);
+            const norm = normalizePath(window.location.pathname);
+            if (norm !== ROUTES.LOGIN) {
+              window.history.replaceState(null, '', ROUTES.LOGIN);
+              setCurrentPath(ROUTES.LOGIN);
+            }
+          }
+          return;
+        }
+      }
+
       if (!isSupabaseConfigured || !supabase) {
         if (isMounted) {
           setAuthLoading(false);
@@ -106,6 +140,7 @@ export default function App() {
               setUser(existingSession.user);
               setUserRole(role);
             } else {
+
               // Unassigned user account: clear session & force to /login
               await supabase.auth.signOut();
               setSession(null);

@@ -11,6 +11,18 @@ export const ROUTES = {
 };
 
 /**
+ * Basic email format validator.
+ * Accepts any non-empty string adhering to standard email format: local@domain.tld
+ * Examples: test@gmail.com, evaluator@gmail.com, abc@xyz.com
+ */
+export function isValidEmailFormat(email) {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(trimmed);
+}
+
+/**
  * Normalizes a pathname string to a canonical route.
  */
 export function normalizePath(pathname) {
